@@ -45,21 +45,30 @@ def axis_frame(d: np.ndarray, up_hint: np.ndarray | None = None) -> np.ndarray:
 
 def orient_outward(verts: np.ndarray, faces: list) -> list:
     """Flip faces if the closed mesh has negative signed volume."""
-    vol = 0.0
-    for a, b, c in faces:
-        vol += float(np.dot(verts[a], np.cross(verts[b], verts[c])))
+    if not faces:
+        return faces
+    f = np.asarray(faces, dtype=np.int64)
+    c = verts.mean(axis=0)
+    v = verts - c
+    vol = float(np.sum(np.einsum("ij,ij->i", v[f[:, 0]], np.cross(v[f[:, 1]], v[f[:, 2]]))))
     if vol < 0:
-        return [(a, c, b) for a, b, c in faces]
+        return [(int(a), int(cc), int(b)) for a, b, cc in faces]
     return faces
 
 
 def compute_normals(verts: np.ndarray, faces: list) -> np.ndarray:
-    nrm = np.zeros_like(verts)
-    for a, b, c in faces:
-        n = np.cross(verts[b] - verts[a], verts[c] - verts[a])
-        nrm[a] += n
-        nrm[b] += n
-        nrm[c] += n
+    if not faces:
+        return np.zeros_like(verts)
+    f = np.asarray(faces, dtype=np.int64)
+    fn = np.cross(verts[f[:, 1]] - verts[f[:, 0]], verts[f[:, 2]] - verts[f[:, 0]])
+    # Weld coincident seam vertices so UV seams share smooth normals
+    _, inv = np.unique(np.round(verts, 5), axis=0, return_inverse=True)
+    n_uniq = int(inv.max()) + 1 if inv.size else 0
+    accum = np.zeros((n_uniq, 3), dtype=np.float64)
+    np.add.at(accum, inv[f[:, 0]], fn)
+    np.add.at(accum, inv[f[:, 1]], fn)
+    np.add.at(accum, inv[f[:, 2]], fn)
+    nrm = accum[inv]
     ln = np.linalg.norm(nrm, axis=1, keepdims=True)
     ln[ln < 1e-12] = 1.0
     return nrm / ln
@@ -79,6 +88,7 @@ class Part:
     bones: list
     power: float = 3.2
     bias: dict = dc_field(default_factory=dict)
+    normals: np.ndarray | None = None
 
     def __post_init__(self):
         self.verts = np.asarray(self.verts, dtype=np.float64)
@@ -99,20 +109,21 @@ def lathe(profile, segs: int, theta_offset: float = math.pi,
     n = len(profile)
     y0, y1 = profile[0][0], profile[-1][0]
     yspan = max(1e-6, y1 - y0)
+    stride = segs + 1
     verts, uvs, faces = [], [], []
     for i, (y, rx, rz) in enumerate(profile):
         v = (y - y0) / yspan
-        for j in range(segs):
-            th = theta_offset + TAU * j / segs
+        for j in range(stride):
+            th = theta_offset + TAU * (j % segs) / segs
             verts.append((rx * math.sin(th), y, rz * math.cos(th)))
             uvs.append((j / segs, v))
     for i in range(n - 1):
         for j in range(segs):
-            j2 = (j + 1) % segs
-            a = i * segs + j
-            b = i * segs + j2
-            c = (i + 1) * segs + j2
-            d = (i + 1) * segs + j
+            j2 = j + 1
+            a = i * stride + j
+            b = i * stride + j2
+            c = (i + 1) * stride + j2
+            d = (i + 1) * stride + j
             faces.append((a, b, c))
             faces.append((a, c, d))
     if close_bottom:
@@ -121,17 +132,15 @@ def lathe(profile, segs: int, theta_offset: float = math.pi,
         verts.append((0.0, y, 0.0))
         uvs.append((0.5, 0.0))
         for j in range(segs):
-            j2 = (j + 1) % segs
-            faces.append((ci, j2, j))
+            faces.append((ci, j + 1, j))
     if close_top:
         y = profile[-1][0]
         ci = len(verts)
         verts.append((0.0, y, 0.0))
         uvs.append((0.5, 1.0))
-        base = (n - 1) * segs
+        base = (n - 1) * stride
         for j in range(segs):
-            j2 = (j + 1) % segs
-            faces.append((ci, base + j, base + j2))
+            faces.append((ci, base + j, base + j + 1))
     verts = np.array(verts, dtype=np.float64)
     return verts, faces, np.array(uvs, dtype=np.float64)
 
@@ -171,13 +180,13 @@ def tube(path, radii, segs: int = 16, cap_start: str = "round", cap_end: str = "
         frames.append((u, v, t))
 
     rings: list[tuple[np.ndarray, np.ndarray, float]] = []  # (center, uv_v)
-    caps: list[tuple[np.ndarray, np.ndarray, float, float]] = []
+    stride = segs + 1
 
     def make_ring(center, u, v, rx, rz, v_uv):
         pts = []
         uvs = []
-        for j in range(segs):
-            th = TAU * j / segs
+        for j in range(stride):
+            th = TAU * (j % segs) / segs
             pts.append(center + u * (rx * math.cos(th)) + v * (rz * math.sin(th)))
             uvs.append((j / segs, v_uv))
         return np.array(pts), np.array(uvs)
@@ -212,11 +221,11 @@ def tube(path, radii, segs: int = 16, cap_start: str = "round", cap_end: str = "
     faces = []
     for i in range(nring - 1):
         for j in range(segs):
-            j2 = (j + 1) % segs
-            a = i * segs + j
-            b = i * segs + j2
-            c = (i + 1) * segs + j2
-            d = (i + 1) * segs + j
+            j2 = j + 1
+            a = i * stride + j
+            b = i * stride + j2
+            c = (i + 1) * stride + j2
+            d = (i + 1) * stride + j
             faces.append((a, b, c))
             faces.append((a, c, d))
     if cap_start == "flat":
@@ -224,16 +233,14 @@ def tube(path, radii, segs: int = 16, cap_start: str = "round", cap_end: str = "
         verts = np.vstack([verts, path[0]])
         uvs = np.vstack([uvs, [0.5, 0.0]])
         for j in range(segs):
-            j2 = (j + 1) % segs
-            faces.append((ci, j2, j))
+            faces.append((ci, j + 1, j))
     if cap_end == "flat":
-        base = (nring - 1) * segs
+        base = (nring - 1) * stride
         ci = len(verts)
         verts = np.vstack([verts, path[-1]])
         uvs = np.vstack([uvs, [0.5, 1.0]])
         for j in range(segs):
-            j2 = (j + 1) % segs
-            faces.append((ci, base + j, base + j2))
+            faces.append((ci, base + j, base + j + 1))
     return verts, faces, uvs
 
 
@@ -244,6 +251,7 @@ def blob(center, radii, p: float = 2.0, segs: int = 24, rings: int = 16,
     verts, uvs, faces = [], [], []
     pole_b = np.array([0.0, -1.0, 0.0])
     pole_t = np.array([0.0, 1.0, 0.0])
+    stride = segs + 1
 
     def sph(theta, y):
         r = math.sqrt(max(0.0, 1.0 - y * y))
@@ -259,8 +267,8 @@ def blob(center, radii, p: float = 2.0, segs: int = 24, rings: int = 16,
         v = i / rings
         idx0 = len(verts)
         ring_idx.append(idx0)
-        for j in range(segs):
-            th = theta_offset + TAU * j / segs
+        for j in range(stride):
+            th = theta_offset + TAU * (j % segs) / segs
             verts.append(shape(sph(th, y)))
             uvs.append((j / segs, v))
     i_b = len(verts)
@@ -270,12 +278,11 @@ def blob(center, radii, p: float = 2.0, segs: int = 24, rings: int = 16,
     verts.append(shape(pole_t))
     uvs.append((0.5, 1.0))
     for j in range(segs):
-        j2 = (j + 1) % segs
-        faces.append((i_b, ring_idx[0] + j2, ring_idx[0] + j))
-        faces.append((i_t, ring_idx[-1] + j, ring_idx[-1] + j2))
+        faces.append((i_b, ring_idx[0] + j + 1, ring_idx[0] + j))
+        faces.append((i_t, ring_idx[-1] + j, ring_idx[-1] + j + 1))
     for k in range(len(ring_idx) - 1):
         for j in range(segs):
-            j2 = (j + 1) % segs
+            j2 = j + 1
             a = ring_idx[k] + j
             b = ring_idx[k] + j2
             c = ring_idx[k + 1] + j2
@@ -371,12 +378,13 @@ def patch(surface: HeadSurface, theta0, theta1, phi0, phi1, nu: int, nv: int, li
     `flip_u` mirrors the sampled art horizontally - used so the right eye and
     brow share the left one's texture cell and still look correct.
     """
-    verts, uvs, faces = [], [], []
+    verts, uvs, norms, faces = [], [], [], []
     for i in range(nv + 1):
         phi = phi0 + (phi1 - phi0) * i / nv
         for j in range(nu + 1):
             th = theta0 + (theta1 - theta0) * j / nu
             verts.append(surface.point(th, phi, lift))
+            norms.append(surface.normal(th, phi))
             u = j / nu
             uvs.append((1.0 - u if flip_u else u, 1.0 - i / nv))
     stride = nu + 1
@@ -388,28 +396,31 @@ def patch(surface: HeadSurface, theta0, theta1, phi0, phi1, nu: int, nv: int, li
             d = (i + 1) * stride + j
             faces.append((a, c, b))
             faces.append((a, d, c))
-    return np.array(verts, dtype=np.float64), faces, np.array(uvs, dtype=np.float64)
+    return (np.array(verts, dtype=np.float64), faces,
+            np.array(uvs, dtype=np.float64), np.array(norms, dtype=np.float64))
 
 
 def torus(center, R: float, r: float, seg_u: int = 24, seg_v: int = 10, R_mat=None):
     verts, uvs, faces = [], [], []
-    for i in range(seg_u):
-        th = TAU * i / seg_u
-        for j in range(seg_v):
-            ph = TAU * j / seg_v
+    stride_u = seg_u + 1
+    stride_v = seg_v + 1
+    for i in range(stride_u):
+        th = TAU * (i % seg_u) / seg_u
+        for j in range(stride_v):
+            ph = TAU * (j % seg_v) / seg_v
             x = (R + r * math.cos(ph)) * math.cos(th)
             y = r * math.sin(ph)
             z = (R + r * math.cos(ph)) * math.sin(th)
             verts.append((x, y, z))
             uvs.append((i / seg_u, j / seg_v))
     for i in range(seg_u):
-        i2 = (i + 1) % seg_u
+        i2 = i + 1
         for j in range(seg_v):
-            j2 = (j + 1) % seg_v
-            a = i * seg_v + j
-            b = i * seg_v + j2
-            c = i2 * seg_v + j2
-            d = i2 * seg_v + j
+            j2 = j + 1
+            a = i * stride_v + j
+            b = i * stride_v + j2
+            c = i2 * stride_v + j2
+            d = i2 * stride_v + j
             faces.append((a, b, c))
             faces.append((a, c, d))
     verts = np.array(verts, dtype=np.float64)
@@ -428,10 +439,10 @@ def cap_shell(surface: HeadSurface, boundary, nu: int = 28, nv: int = 8, scale: 
     plus (optionally) a rim band folding underneath, giving the cap thickness.
     """
     verts, uvs, faces = [], [], []
-    thetas = [(theta_offset + TAU * j / nu) for j in range(nu)]
+    stride = nu + 1
+    thetas = [(theta_offset + TAU * (j % nu) / nu) for j in range(stride)]
     bounds = [boundary(t) for t in thetas]
     c = surface.hc
-    radii = surface.hr
 
     def pt(th, phi, sc):
         p = surface.point(th, phi)
@@ -444,37 +455,36 @@ def cap_shell(surface: HeadSurface, boundary, nu: int = 28, nv: int = 8, scale: 
         for j, th in enumerate(thetas):
             phi = bounds[j] * (i / nv)
             verts.append(pt(th, phi, scale))
-            uvs.append((j / nu, i / nv))
+            uvs.append((j / nu, 1.0 - i / nv))
     i_pole = len(verts)
     verts.append(pt(0.0, 0.0, scale))
-    uvs.append((0.0, 0.0))
+    uvs.append((0.5, 1.0))
     for j in range(nu):
-        j2 = (j + 1) % nu
-        faces.append((i_pole, rings[0] + j, rings[0] + j2))
+        faces.append((i_pole, rings[0] + j + 1, rings[0] + j))
     for k in range(len(rings) - 1):
         for j in range(nu):
-            j2 = (j + 1) % nu
+            j2 = j + 1
             a = rings[k] + j
             b = rings[k] + j2
             cc = rings[k + 1] + j2
             d = rings[k + 1] + j
-            faces.append((a, b, cc))
-            faces.append((a, cc, d))
+            faces.append((a, cc, b))
+            faces.append((a, d, cc))
     if rim > 0.0:
         idx0 = len(verts)
         for j, th in enumerate(thetas):
             phi = bounds[j]
             verts.append(pt(th, phi, scale * (1.0 - rim)))
-            uvs.append((j / nu, 1.0))
+            uvs.append((j / nu, 0.0))
         base = rings[-1]
         for j in range(nu):
-            j2 = (j + 1) % nu
+            j2 = j + 1
             a = base + j
             b = base + j2
             cc = idx0 + j2
             d = idx0 + j
-            faces.append((a, d, cc))
             faces.append((a, cc, b))
+            faces.append((a, d, cc))
     return np.array(verts, dtype=np.float64), faces, np.array(uvs, dtype=np.float64)
 
 
@@ -535,32 +545,45 @@ def leg_path(m: Metrics, side_x: float, y_top: float, y_bottom: float, n: int = 
 # Character assembly
 # ---------------------------------------------------------------------------
 
+def remap_uv_box(prim, u0: float, v0: float, u1: float, v1: float):
+    """Remap a primitive's [0..1] UVs into a sub-rectangle [u0..u1, v0..v1] of its cell."""
+    verts, faces, uvs = prim[0], prim[1], np.asarray(prim[2], dtype=np.float64).copy()
+    uvs[:, 0] = u0 + (u1 - u0) * np.clip(uvs[:, 0], 0.0, 1.0)
+    uvs[:, 1] = v0 + (v1 - v0) * np.clip(uvs[:, 1], 0.0, 1.0)
+    return (verts, faces, uvs) if len(prim) == 3 else (verts, faces, uvs, prim[3])
+
+
 def build_mesh(spec: dict, m: Metrics, rig: Rig):
     hc, hr = m.head_c, m.head_r
     surf = HeadSurface(hc, hr)
     detail = float(spec.get("poly_detail", 1.0))
     segs = max(8, int(round(20 * detail)))
-    hsegs = max(10, int(round(28 * detail)))
+    hsegs = max(12, int(round(28 * detail)))
     parts: list[Part] = []
 
     def add(name, material, prim, bones, power=3.2, bias=None, outward=True, conform=False):
-        verts, faces, uvs = prim
+        if len(prim) == 4:
+            verts, faces, uvs, norms = prim
+            norms = np.asarray(norms, dtype=np.float64)
+        else:
+            verts, faces, uvs = prim
+            norms = None
         verts = np.asarray(verts, dtype=np.float64)
         faces = [tuple(f) for f in faces]
         if conform:
             # glue head mounted parts onto the sculpted skull so nothing floats
             verts = head_deform(verts, hc, hr)
-        if outward and len(faces) > 4:
+        if outward and len(faces) > 4 and norms is None:
             faces = orient_outward(verts, faces)
         parts.append(Part(name, material, verts, faces, np.asarray(uvs, dtype=np.float64),
-                          list(bones), power, dict(bias or {})))
+                          list(bones), power, dict(bias or {}), normals=norms))
 
     H = m.H
     # =====================================================================
     # TORSO / SPINE
     # =====================================================================
     torso_profile = [(y, rx, rz) for (y, rx, rz) in m.profile]
-    add("torso", "top" if spec["top_style"] in ("tee", "tank", "tropical", "hoodie", "armor") else "skin",
+    add("torso", "top" if spec["top_style"] in ("tee", "tropical", "hoodie", "armor") else "skin",
         lathe(torso_profile, segs, close_bottom=True, close_top=True),
         ["Hips", "Spine", "Chest", "Neck", "Shoulder.L", "Shoulder.R"])
 
@@ -573,13 +596,27 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
     # =====================================================================
     # HEAD
     # =====================================================================
-    hverts, hfaces, huvs = blob(hc, hr, p=2.0, segs=hsegs, rings=max(10, hsegs // 2), theta_offset=math.pi)
-    add("head", "head", (head_deform(hverts, hc, hr), hfaces, huvs), ["Head", "Neck"], power=2.4,
+    hrings = max(16, int(round(hsegs * 0.75)))
+    hverts, hfaces, huvs = blob(hc, hr, p=2.0, segs=hsegs, rings=hrings, theta_offset=math.pi)
+    hverts_def = head_deform(hverts, hc, hr)
+    # Analytical surface normals on the head match the face patches seamlessly
+    hnorms = np.zeros_like(hverts_def)
+    stride_h = hsegs + 1
+    for i in range(1, hrings):
+        y = -1.0 + 2.0 * i / hrings
+        phi = math.acos(max(-1.0, min(1.0, y)))
+        base_idx = (i - 1) * stride_h
+        for j in range(stride_h):
+            th = math.pi + TAU * (j % hsegs) / hsegs
+            hnorms[base_idx + j] = surf.normal(th, phi)
+    hnorms[-2] = np.array([0.0, -1.0, 0.0])
+    hnorms[-1] = np.array([0.0, 1.0, 0.0])
+    add("head", "head", (hverts_def, hfaces, huvs, hnorms), ["Head", "Neck"], power=2.4,
         bias={"Head": 3.0})
 
     # face feature patches -------------------------------------------------
     fl = face_layout(m, spec)
-    lift = H * 0.0022
+    lift = H * 0.0009
     for side in ("L", "R"):
         th, ph, w, h, dth, dph = fl[f"eye.{side}"]
         add(f"eye.{side}", "eyes",
@@ -601,39 +638,44 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
     if spec["nose_style"] != "none":
         nsz = {"button": 0.021, "small": 0.015, "snub": 0.024, "wide": 0.032}[spec["nose_style"]]
         npos = surf.point(nth, nph)
-        add("nose", "skin", blob(npos + (hc - npos) * 0.10, (H * nsz * 0.5, H * nsz * 0.42, H * nsz * 0.55),
+        add("nose", "skin", blob(npos + (hc - npos) * 0.12, (H * nsz * 0.48, H * nsz * 0.40, H * nsz * 0.50),
                                  p=2.1, segs=12, rings=8), ["Head"], power=2.0)
     if spec["beard"] != "none":
         if spec["beard"] in ("goatee", "full"):
-            bp = surf.point(0.0, mph + 0.17, lift * 0.5)
-            add("beard", "facial", blob(bp, (hr[0] * 0.34, hr[1] * 0.24, hr[2] * 0.26), p=2.0, segs=14, rings=10),
+            bp = surf.point(0.0, mph + 0.22, -hr[2] * 0.10)
+            bw_r = hr[0] * (0.58 if spec["beard"] == "full" else 0.28)
+            bh_r = hr[1] * (0.24 if spec["beard"] == "full" else 0.18)
+            bz_r = hr[2] * 0.20
+            add("beard", "facial", blob(bp, (bw_r, bh_r, bz_r), p=2.2, segs=14, rings=10),
                 ["Head"], power=2.0)
         if spec["beard"] in ("mustache", "full", "goatee"):
-            mp = surf.point(0.0, mph - 0.19, lift * 0.5)
-            add("mustache", "facial", blob(mp, (hr[0] * 0.30, hr[1] * 0.085, hr[2] * 0.15), p=2.2, segs=14, rings=8),
+            mp = surf.point(0.0, mph - 0.11, -hr[2] * 0.03)
+            add("mustache", "facial", blob(mp, (hr[0] * 0.26, hr[1] * 0.055, hr[2] * 0.09), p=2.2, segs=14, rings=8),
                 ["Head"], power=2.0)
 
     if spec["ears"] in ("cat", "fox", "round", "elf"):
         emat = "extras_skin" if spec["ears"] in ("round", "elf") else "extras"
         for side, s in (("L", 1.0), ("R", -1.0)):
-            base = surf.point(s * 1.15, 0.92, -hr[0] * 0.02)
-            if spec["ears"] == "round":
-                add(f"ear.{side}", emat, blob(base + np.array([0, hr[1] * 0.20, 0]),
-                                              (hr[0] * 0.24, hr[1] * 0.24, hr[2] * 0.11), p=2.0, segs=12, rings=8),
-                    [f"Ear.{side}", "Head"], power=2.5, conform=True)
-            elif spec["ears"] == "elf":
-                tip = base + np.array([s * hr[0] * 0.55, hr[1] * 0.45, -hr[2] * 0.16])
-                add(f"ear.{side}", emat, tube([base, base * 0.45 + tip * 0.55, tip],
-                                              [hr[0] * 0.22, hr[0] * 0.13, hr[0] * 0.02], segs=10,
-                                              cap_start="flat", cap_end="round"),
-                    [f"Ear.{side}", "Head"], power=2.5, conform=True)
-            else:
-                height = hr[1] * (1.05 if spec["ears"] == "fox" else 0.78)
-                tip = base + np.array([s * hr[0] * 0.22, height, -hr[2] * 0.10])
+            if spec["ears"] in ("cat", "fox"):
+                base = surf.point(s * 0.92, 0.58, -hr[0] * 0.03)
+                height = hr[1] * (0.68 if spec["ears"] == "fox" else 0.52)
+                tip = base + np.array([s * hr[0] * 0.24, height, -hr[2] * 0.06])
                 path = [base, base * 0.5 + tip * 0.5, tip]
-                rad = [(hr[0] * 0.20, hr[2] * 0.055), (hr[0] * 0.12, hr[2] * 0.035), (hr[0] * 0.015, hr[2] * 0.012)]
+                rad = [(hr[0] * 0.22, hr[2] * 0.08), (hr[0] * 0.14, hr[2] * 0.05), (hr[0] * 0.02, hr[2] * 0.018)]
                 add(f"ear.{side}", emat, tube(path, rad, segs=10, cap_start="flat", cap_end="round"),
-                    [f"Ear.{side}", "Head"], power=2.5, conform=True)
+                    [f"Ear.{side}", "Head"], power=2.5)
+            elif spec["ears"] == "round":
+                base = surf.point(s * 1.48, 1.45, -hr[0] * 0.02)
+                add(f"ear.{side}", emat, blob(base + np.array([s * hr[0] * 0.06, 0, 0]),
+                                              (hr[0] * 0.16, hr[1] * 0.18, hr[2] * 0.09), p=2.0, segs=12, rings=8),
+                    [f"Ear.{side}", "Head"], power=2.5)
+            elif spec["ears"] == "elf":
+                base = surf.point(s * 1.45, 1.45, -hr[0] * 0.02)
+                tip = base + np.array([s * hr[0] * 0.48, hr[1] * 0.28, -hr[2] * 0.14])
+                add(f"ear.{side}", emat, tube([base, base * 0.45 + tip * 0.55, tip],
+                                              [hr[0] * 0.16, hr[0] * 0.10, hr[0] * 0.02], segs=10,
+                                              cap_start="flat", cap_end="round"),
+                    [f"Ear.{side}", "Head"], power=2.5)
 
     if spec["tail"] != "none":
         base = np.array([0.0, m.hip_y + m.torso_h * 0.16, -m.r_hip * 0.82])
@@ -655,14 +697,18 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
     # =====================================================================
     # ARMS + HANDS
     # =====================================================================
+    sleeved_top = spec["top_style"] not in ("none", "tank") and spec["sleeve"] != "none"
     for side, s in (("L", 1.0), ("R", -1.0)):
         root = np.array([s * m.arm_root[0], m.arm_root[1], m.arm_root[2]])
         el = np.array([s * m.elbow[0], m.elbow[1], m.elbow[2]])
         wr = np.array([s * m.wrist[0], m.wrist[1], m.wrist[2]])
         ht = np.array([s * m.hand_tip[0], m.hand_tip[1], m.hand_tip[2]])
         # deltoid - biased to the upper arm so it follows shoulder rotation
-        add(f"deltoid.{side}", "skin", blob(root, (m.r_upper_arm * 1.32, m.r_upper_arm * 1.30, m.r_upper_arm * 1.26),
-                                            p=2.0, segs=14, rings=10),
+        delt_prim = blob(root, (m.r_upper_arm * 1.28, m.r_upper_arm * 1.26, m.r_upper_arm * 1.24),
+                         p=2.0, segs=14, rings=10)
+        if sleeved_top:
+            delt_prim = remap_uv_box(delt_prim, 0.78, 0.25, 0.96, 0.80)
+        add(f"deltoid.{side}", "top" if sleeved_top else "skin", delt_prim,
             [f"Shoulder.{side}", f"UpperArm.{side}", "Chest"], power=3.0,
             bias={f"UpperArm.{side}": 2.2, "Chest": 0.35})
         arm_path = [root, root * 0.5 + el * 0.5, el, el * 0.5 + wr * 0.5, wr]
@@ -697,7 +743,6 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
             [f"Thigh.{side}", f"Shin.{side}", f"Foot.{side}", "Hips"], power=3.0)
 
         # foot
-        fwd = 0.55 if s > 0 else 0.55
         fc = np.array([s * m.ankle[0] * 1.0, m.foot_h * 0.62, an[2] + m.foot_len * 0.30])
         add(f"foot.{side}", "skin",
             blob(fc, (m.foot_w * 0.52, m.foot_h * 0.82, m.foot_len * 0.62), p=3.0, segs=16, rings=12),
@@ -718,23 +763,24 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
 
         def boundary(th: float) -> float:
             """phi limit of the hair cap as a function of azimuth (front -> back)."""
-            a = math.cos(th - math.pi)     # 1 at the front
-            front = {"buzz": 0.85, "short": 0.95, "bob": 0.96, "long": 0.97, "ponytail": 1.00,
-                     "spiky": 1.00, "curly": 0.98, "mohawk": 0.55, "topknot": 0.95}[hair]
-            back = {"buzz": 0.95, "short": 1.55, "bob": 2.35, "long": 2.25, "ponytail": 1.75,
-                    "spiky": 1.45, "curly": 1.65, "mohawk": 1.30, "topknot": 1.45}[hair]
-            front -= 0.30 * bangs if hair in ("short", "bob", "long", "ponytail", "curly", "spiky") else 0.0
-            k = (1.0 - a) * 0.5                       # 0 front, 1 back
-            b = front + (back - front) * (k ** 0.85)
-            return min(math.pi * 0.97, b)
+            a = math.cos(th)               # +1 at the front (th=0), -1 at the back (th=pi)
+            front = {"buzz": 0.78, "short": 0.82, "bob": 0.80, "long": 0.80, "ponytail": 0.82,
+                     "spiky": 0.82, "curly": 0.80, "mohawk": 0.52, "topknot": 0.82}[hair]
+            back = {"buzz": 2.10, "short": 2.18, "bob": 2.32, "long": 2.38, "ponytail": 2.18,
+                    "spiky": 2.08, "curly": 2.20, "mohawk": 2.00, "topknot": 2.15}[hair]
+            front += 0.16 * bangs if hair in ("short", "bob", "long", "ponytail", "curly", "spiky") else 0.0
+            k = (1.0 - a) * 0.5                       # 0 front (th=0), 1 back (th=pi)
+            b = front + (back - front) * (k ** 0.80)
+            return min(math.pi * 0.92, b)
 
-        scale = 1.0 + 0.055 * vol
+        scale = 1.03 + 0.055 * vol
         add("hair_cap", "hair",
-            cap_shell(surf, boundary, nu=max(16, hsegs), nv=8, scale=scale, rim=0.045),
-            ["Head", "HairBack"], power=2.2, bias={"Head": 2.0}, outward=False, conform=True)
+            cap_shell(surf, boundary, nu=max(16, hsegs), nv=10, scale=scale, rim=0.035),
+            ["Head", "HairBack"], power=2.2, bias={"Head": 2.0}, outward=False)
 
-        # strand / volume add-ons
-        rng = np.random.default_rng(abs(hash((hair, round(vol, 3)))) % (2 ** 31))
+        # deterministic seed for strand / volume add-ons
+        seed_val = sum((i + 1) * ord(c) for i, c in enumerate(hair)) + int(round(vol * 1000))
+        rng = np.random.default_rng(seed_val)
 
         def strand(center, length, dirv, w=0.34, mat="hair", bones=None, taper=0.06):
             d = _norm(np.asarray(dirv, dtype=np.float64))
@@ -744,80 +790,109 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
             r0 = hr[0] * w * 0.42
             add("strand", mat, tube([p0, p1, p2], [r0 * 1.1, r0 * 0.85, r0 * taper], segs=10,
                                     cap_start="flat", cap_end="round"),
-                bones or ["Head", "HairBack"], power=2.4, outward=True, conform=True)
+                bones or ["Head", "HairBack"], power=2.4, outward=True)
 
         if hair == "spiky":
             n = 13
             for i in range(n):
                 a = TAU * i / n + 0.3
-                rad = hr[0] * (0.15 + 0.62 * ((i % 3) / 2.0))
-                base = surf.point(a, 0.62 + 0.22 * ((i % 3) / 2.0))
-                out = _norm((base - hc) * np.array([1, 0.55, 1]))
-                strand(base, hr[1] * (0.9 + 0.5 * rng.random()), out, w=0.55)
+                base = surf.point(a, 0.52 + 0.22 * ((i % 3) / 2.0))
+                out = _norm((base - hc) * np.array([1.0, 0.75, 1.0]))
+                strand(base, hr[1] * (0.72 + 0.38 * rng.random()) * vol, out, w=0.50)
         elif hair == "curly":
-            n = 26
+            n = 28
             for i in range(n):
-                a = TAU * (i * 0.618) % TAU
+                a = (TAU * (i * 0.618034)) % TAU
                 u = rng.random()
-                phi = 0.25 + 0.95 * u
-                base = surf.point(a, phi) * 0.0 + surf.point(a, phi)
-                add("curl", "hair", blob(base, (hr[0] * 0.30, hr[0] * 0.30, hr[0] * 0.30), p=2.0, segs=10, rings=8),
-                    ["Head", "HairBack"], power=2.4, conform=True)
+                max_p = boundary(a) * 0.95
+                phi = 0.20 + (max_p - 0.20) * u
+                base = surf.point(a, phi, hr[0] * 0.04 * vol)
+                rc = hr[0] * (0.24 + 0.08 * (i % 3) / 2.0) * (0.85 + 0.25 * vol)
+                add("curl", "hair", blob(base, (rc, rc, rc), p=2.0, segs=10, rings=8),
+                    ["Head", "HairBack"], power=2.4)
         elif hair == "mohawk":
             n = 7
             for i in range(n):
-                t = (i / (n - 1)) * 2 - 1
-                base = surf.point(math.pi if t > 0 else 0.0, 0.55 + 0.42 * t * t)
-                h = hr[1] * (0.75 - 0.28 * abs(t)) * vol
-                add("mohawk", "hair", tube([base, base + np.array([0, h, 0])],
-                                           [hr[0] * 0.16, hr[0] * 0.10], segs=10, cap_start="flat", cap_end="round"),
-                    ["Head", "HairBack"], power=2.4, conform=True)
+                t = i / (n - 1)                # 0 front -> 1 back along crown
+                th_m = 0.0 if t < 0.45 else math.pi
+                phi_m = abs(t - 0.45) * 1.65
+                base = surf.point(th_m, phi_m)
+                out_d = _norm(surf.normal(th_m, phi_m) + np.array([0.0, 0.65, 0.0]))
+                h = hr[1] * (0.68 - 0.20 * abs(t - 0.4)) * vol
+                add("mohawk", "hair", tube([base - out_d * (hr[0] * 0.05), base + out_d * h],
+                                           [hr[0] * 0.16, hr[0] * 0.08], segs=10, cap_start="flat", cap_end="round"),
+                    ["Head", "HairBack"], power=2.4)
         elif hair == "topknot":
-            base = surf.point(math.pi, 0.10) * 0.0 + surf.point(math.pi, 0.10) + np.array([0, hr[1] * 0.55, 0])
-            add("knot", "hair", blob(base, (hr[0] * 0.42 * vol, hr[1] * 0.34 * vol, hr[0] * 0.42 * vol),
-                                     p=2.0, segs=16, rings=12), ["Head"], power=2.4, conform=True)
+            base = surf.point(math.pi, 0.22, hr[1] * 0.24 * vol)
+            add("knot", "hair", blob(base, (hr[0] * 0.36 * vol, hr[1] * 0.30 * vol, hr[0] * 0.36 * vol),
+                                     p=2.0, segs=16, rings=12), ["Head"], power=2.4)
         elif hair in ("bob", "long"):
-            # side curtains + skirt of hair
-            top_y = hc[1] + hr[1] * 0.35
-            skirt_bottom = (m.neck_base_y - m.torso_h * 0.24) if hair == "long" else (hc[1] - hr[1] * 0.92)
-            n = max(18, hsegs)
-            prof = []
-            steps = 8
-            for i in range(steps):
-                t = i / (steps - 1)
+            # Open curtain wrapping around the sides and back of the head (leaving the face open)
+            nu_s = max(18, hsegs)
+            nv_s = 9
+            th0, th1 = 0.34 * math.pi, 1.66 * math.pi
+            top_y = hc[1] + hr[1] * 0.28
+            skirt_bottom = (m.neck_base_y - m.torso_h * 0.22) if hair == "long" else (hc[1] - hr[1] * 0.88)
+            sv, suv, sf = [], [], []
+            for i in range(nv_s + 1):
+                t = i / nv_s
                 y = top_y + (skirt_bottom - top_y) * t
-                # hugs the skull at the top, then falls with a gentle flare
-                flare = 1.03 + (0.14 if hair == "long" else 0.05) * smoothstep(t * 1.1)
-                shrink = 1.0 - 0.10 * t * t          # tuck in toward the tips
-                prof.append((y, hr[0] * 1.01 * flare * shrink, hr[2] * 1.01 * flare * shrink))
-            add("hair_skirt", "hair", lathe(prof, n, close_bottom=False, close_top=False),
-                ["Head", "HairBack", "Neck"], power=2.4, outward=False, conform=True)
+                flare = (1.03 + 0.05 * vol) + (0.14 if hair == "long" else 0.05) * smoothstep(t * 1.1)
+                shrink = 1.0 - (0.06 if hair == "long" else 0.12) * t * t
+                rx_s = hr[0] * flare * shrink
+                rz_s = hr[2] * flare * shrink
+                for j in range(nu_s + 1):
+                    u_j = j / nu_s
+                    th = th0 + (th1 - th0) * u_j
+                    # taper inward slightly at the front temple edges
+                    edge = math.sin(math.pi * u_j) ** 0.35
+                    r_mult = 0.94 + 0.06 * edge
+                    sv.append((hc[0] + rx_s * r_mult * math.sin(th), y, hc[2] + rz_s * r_mult * math.cos(th)))
+                    suv.append((u_j, 1.0 - t))
+            stride_s = nu_s + 1
+            for i in range(nv_s):
+                for j in range(nu_s):
+                    a_ = i * stride_s + j
+                    b_ = a_ + 1
+                    c_ = a_ + stride_s + 1
+                    d_ = a_ + stride_s
+                    # Both outer and inner faces so back/side hair is visible from front and back
+                    sf.append((a_, c_, b_))
+                    sf.append((a_, d_, c_))
+                    sf.append((a_, b_, c_))
+                    sf.append((a_, c_, d_))
+            add("hair_skirt", "hair", (np.array(sv), sf, np.array(suv)),
+                ["Head", "HairBack", "Neck"], power=2.4, outward=False)
         elif hair == "ponytail":
-            b = surf.point(math.pi, 1.95) + np.array([0, 0, -hr[2] * 0.10])
-            mid = b + np.array([0.0, -hr[1] * 0.45, -hr[2] * 0.55])
-            tip = mid + np.array([0.0, -hr[1] * 0.85, hr[2] * 0.15])
+            b = surf.point(math.pi, 1.45, hr[2] * 0.04)
+            mid = b + np.array([0.0, -hr[1] * 0.35, -hr[2] * 0.45])
+            tip = mid + np.array([0.0, -hr[1] * 0.78, -hr[2] * 0.10])
             add("ponytail", "hair",
-                tube([b, mid, tip], [hr[0] * 0.34 * vol, hr[0] * 0.30 * vol, hr[0] * 0.10], segs=14,
-                     cap_start="flat", cap_end="round"),
-                ["Head", "HairBack", "HairTail"], power=2.4, conform=True)
+                tube([b, mid, tip], [hr[0] * 0.30 * vol, hr[0] * 0.26 * vol, hr[0] * 0.09], segs=14,
+                     cap_start="round", cap_end="round"),
+                ["Head", "HairBack", "HairTail"], power=2.4)
         elif hair == "buzz":
             pass
 
-        # bangs: strands hanging from the hairline (they stop above the brows)
+        # bangs: subtle fringe strands emerging from the front hairline of hair_cap
         if bangs > 0.02 and hair not in ("buzz", "mohawk"):
-            n = 9
+            n = 7
+            cap_lift = hr[0] * (scale - 1.0)
             for i in range(n):
                 t = (i / (n - 1)) * 2 - 1
-                a = t * 0.80
-                phi0 = 0.92 - 0.22 * bangs - 0.10 * abs(t)
-                base = surf.point(a, phi0) + surf.normal(a, phi0) * hr[0] * 0.03
-                length = hr[1] * (0.16 + 0.30 * bangs) * (1.0 - 0.30 * abs(t))
-                tip = base + np.array([0.0, -length, hr[2] * 0.06])
-                r = hr[0] * (0.26 - 0.08 * abs(t))
-                mid = base * 0.45 + tip * 0.55
-                add("bang", "hair", tube([base, mid, tip], [r * 1.05, r * 0.85, r * 0.30],
-                                         segs=10, cap_start="flat", cap_end="round"),
-                    ["Head", "HairBack"], power=2.4, conform=True)
+                a = t * 0.58
+                b_phi = boundary(a)
+                phi0 = max(0.38, b_phi - 0.22)
+                phi1 = b_phi + (0.06 + 0.08 * bangs) * (1.0 - 0.35 * abs(t))
+                phi_mid = 0.5 * (phi0 + phi1)
+                p0 = surf.point(a * 0.90, phi0, cap_lift * 0.65)
+                p1 = surf.point(a * 0.96, phi_mid, cap_lift * 1.02)
+                p2 = surf.point(a, phi1, cap_lift * 0.45)
+                r = hr[0] * (0.14 - 0.025 * abs(t))
+                bprim = tube([p0, p1, p2], [(r * 0.85, r * 0.32), (r * 0.95, r * 0.36), (r * 0.35, r * 0.16)],
+                             segs=10, cap_start="round", cap_end="round")
+                add("bang", "hair", remap_uv_box(bprim, 0.15, 0.08, 0.85, 0.55),
+                    ["Head", "HairBack"], power=2.4, outward=True)
 
     # =====================================================================
     # CLOTHING
@@ -842,18 +917,21 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
 
         # collar
         collar = spec["collar"]
-        if collar in ("crew", "v") and top_style != "tank":
+        if collar == "crew" and top_style != "tank":
             cy = profile[-1][0]
-            rneck = m.r_neck * (1.22 if collar == "crew" else 1.12)
+            rneck = m.r_neck * 1.22
             cp = [(cy - m.torso_h * 0.015, rneck, rneck),
                   (cy + m.torso_h * 0.030, rneck * 1.10, rneck * 1.10)]
-            add("collar", "top", lathe(cp, max(12, segs // 2), close_bottom=False, close_top=False),
+            cprim = remap_uv_box(lathe(cp, max(12, segs // 2), close_bottom=False, close_top=False),
+                                 0.02, 0.93, 0.98, 0.99)
+            add("collar", "top", cprim,
                 ["Chest", "Neck"], power=3.4, bias={"Neck": 1.6}, outward=False)
         hood = None
         if top_style == "hoodie" or collar == "hood":
             hy = m.shoulder_y
             hp = np.array([0.0, hy + m.torso_h * 0.06, -m.r_chest * 0.62])
-            hood = blob(hp, (m.r_chest * 0.78, m.torso_h * 0.34, m.r_chest * 0.62), p=2.4, segs=18, rings=13)
+            hood = remap_uv_box(blob(hp, (m.r_chest * 0.78, m.torso_h * 0.34, m.r_chest * 0.62), p=2.4, segs=18, rings=13),
+                                0.76, 0.15, 0.98, 0.85)
             add("hood", "top", hood, ["Chest", "Neck", "Head"], power=2.6)
 
         # sleeves / straps
@@ -866,28 +944,33 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
                 # shoulder strap
                 a = np.array([s * m.shoulder_x * 0.45, m.shoulder_y + m.torso_h * 0.02, m.r_chest * 0.30])
                 b = np.array([s * m.shoulder_x * 0.45, m.shoulder_y + m.torso_h * 0.02, -m.r_chest * 0.34])
-                add(f"strap.{side}", "top", tube([a, a * 0.5 + b * 0.5 + np.array([s * 0.01, m.torso_h * 0.06, 0]), b],
-                                                 [m.r_upper_arm * 0.55, m.r_upper_arm * 0.6, m.r_upper_arm * 0.55],
-                                                 segs=10, cap_start="flat", cap_end="flat"),
+                sprim = remap_uv_box(tube([a, a * 0.5 + b * 0.5 + np.array([s * 0.01, m.torso_h * 0.06, 0]), b],
+                                          [m.r_upper_arm * 0.55, m.r_upper_arm * 0.6, m.r_upper_arm * 0.55],
+                                          segs=10, cap_start="flat", cap_end="flat"),
+                                     0.78, 0.20, 0.96, 0.80)
+                add(f"strap.{side}", "top", sprim,
                     ["Chest", f"Shoulder.{side}"], power=2.8)
                 continue
             if sleeve == "none":
                 continue
-            end = el if sleeve == "short" else wr
-            path = [root - (root - el) * 0.12, root * 0.5 + el * 0.5, el]
-            rads = [m.r_upper_arm * 1.34, m.r_upper_arm * 1.16, m.r_upper_arm * 1.06]
+            path = [root, root * 0.5 + el * 0.5, el]
+            rads = [m.r_upper_arm * 1.18, m.r_upper_arm * 1.12, m.r_upper_arm * 1.05]
             if sleeve == "long":
-                path = [root - (root - el) * 0.12, root * 0.5 + el * 0.5, el, el * 0.5 + wr * 0.5, wr]
-                rads = [m.r_upper_arm * 1.34, m.r_upper_arm * 1.16, m.r_upper_arm * 1.04, m.r_forearm * 1.10, m.r_forearm * 1.04]
-            add(f"sleeve.{side}", "top", tube(path, rads, segs=max(10, segs - 4), cap_start="round", cap_end="flat"),
+                path = [root, root * 0.5 + el * 0.5, el, el * 0.5 + wr * 0.5, wr]
+                rads = [m.r_upper_arm * 1.18, m.r_upper_arm * 1.12, m.r_upper_arm * 1.03, m.r_forearm * 1.10, m.r_forearm * 1.04]
+            sl_prim = remap_uv_box(tube(path, rads, segs=max(10, segs - 4), cap_start="round", cap_end="flat"),
+                                   0.76, 0.15, 0.98, 0.85)
+            add(f"sleeve.{side}", "top", sl_prim,
                 [f"Shoulder.{side}", f"UpperArm.{side}", f"LowerArm.{side}"], power=2.9)
 
         if top_style == "armor":
             for side, s in (("L", 1.0), ("R", -1.0)):
                 root = np.array([s * m.arm_root[0], m.arm_root[1], m.arm_root[2]])
-                add(f"pad.{side}", "top", blob(root + np.array([0, m.r_upper_arm * 0.10, 0]),
-                                               (m.r_upper_arm * 1.42, m.r_upper_arm * 1.05, m.r_upper_arm * 1.40),
-                                               p=2.6, segs=16, rings=11),
+                pprim = remap_uv_box(blob(root + np.array([0, m.r_upper_arm * 0.10, 0]),
+                                          (m.r_upper_arm * 1.42, m.r_upper_arm * 1.05, m.r_upper_arm * 1.40),
+                                          p=2.6, segs=16, rings=11),
+                                     0.76, 0.10, 0.98, 0.95)
+                add(f"pad.{side}", "top", pprim,
                     [f"Shoulder.{side}", f"UpperArm.{side}", "Chest"], power=3.0)
             # chest plate: a shell wrapped around the front of the torso
             pv, pf, puv = [], [], []
@@ -918,25 +1001,28 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
         waist_y = m.hip_y + m.torso_h * 0.30
         if bstyle == "skirt":
             hem_y = m.hip_y - (m.hip_y - m.knee_y) * (0.35 + 0.75 * bl)
-            steps = 10
+            steps = 12
             prof = []
+            w_rx, w_rz = torso_radii_at(m, waist_y)
+            hip_t = (waist_y - m.hip_y) / max(1e-6, waist_y - hem_y)
+            # lathe expects bottom -> top
             for i in range(steps):
-                t = i / (steps - 1)
+                t = 1.0 - i / (steps - 1)             # 1 at hem (bottom) -> 0 at waist (top)
                 y = waist_y - (waist_y - hem_y) * t
                 tx, tz = torso_radii_at(m, y)
-                lx, lz = lower_body_radii(m, y, 1.12)
-                flare = 1.0 + 0.42 * t * t
-                prof.append((y, max(tx, lx) * flare, max(tz, lz) * flare))
+                lx, lz = lower_body_radii(m, min(y, m.hip_y), 1.12)
+                k = smoothstep(min(1.0, t / max(0.08, hip_t * 0.80)))
+                flare = 1.0 + 0.36 * (max(0.0, t - hip_t * 0.4) ** 1.3)
+                rx = (w_rx * 1.06) * (1.0 - k) + max(tx, lx) * flare * k
+                rz = (w_rz * 1.06) * (1.0 - k) + max(tz, lz) * flare * k
+                prof.append((y, rx, rz))
             add("skirt", "bottom", lathe(prof, segs, close_bottom=True, close_top=True),
-                ["Hips", "Spine"], power=2.6)
+                ["Hips", "Spine", "Thigh.L", "Thigh.R"], power=2.6)
         else:
             # hip block: A-line from the waist down over the crotch, then two legs
             leg_span = max(1e-6, m.hip_y - m.ankle_y)
             crotch_y = m.hip_y - leg_span * 0.22
             top_rx, top_rz = torso_radii_at(m, waist_y)
-            thigh_r0 = m.r_thigh
-            bot_rx = m.hip_x + thigh_r0 * 1.06
-            bot_rz = max(m.r_hip * 1.05, thigh_r0 * 1.50)
             hip_prof = []
             steps = 10
             for i in range(steps):
@@ -1023,80 +1109,87 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
     # --- glasses ----------------------------------------------------------
     gl = spec["glasses"]
     if gl != "none":
+        eth_l, eph_l, _, _, _, _ = fl["eye.L"]
+        epos_l = surf.point(eth_l, eph_l)
+        ez = float(epos_l[2]) + m.eye_r * 0.32
         for side, s in (("L", 1.0), ("R", -1.0)):
             ex = s * m.eye_x
-            ez = hc[2] + hr[2] * 1.06
             if gl in ("round", "square"):
-                Rl = m.eye_r * (1.9 if gl == "round" else 1.85)
-                rr = m.eye_r * (0.16 if gl == "round" else 0.14)
+                Rl = m.eye_r * (1.32 if gl == "round" else 1.28)
+                rr = m.eye_r * (0.12 if gl == "round" else 0.11)
+                R_tor = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
                 if gl == "round":
-                    v, f, uv = torus(np.array([ex, m.eye_y, ez]), Rl, rr, 20, 8, R_mat=np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1.0]]))
+                    v, f, uv = torus(np.array([ex, m.eye_y, ez]), Rl, rr, 20, 8, R_mat=R_tor)
                 else:
-                    v, f, uv = torus(np.array([ex, m.eye_y, ez]), Rl, rr, 4, 8, R_mat=np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1.0]]))
-                    # square-ish: no smoothing needed, 4 segments gives a rounded quad frame
-                add(f"glasses_frame.{side}", "glasses", (v, f, uv), ["Head"], power=2.0, conform=True)
-                add(f"glasses_lens.{side}", "glasses", blob(np.array([ex, m.eye_y, ez]),
-                                                            (Rl * 0.94, Rl * 0.94, m.eye_r * 0.10), p=2.0, segs=16, rings=10),
-                    ["Head"], power=2.0, conform=True)
+                    v, f, uv = torus(np.array([ex, m.eye_y, ez]), Rl, rr, 4, 8,
+                                     R_mat=R_tor @ np.array([[0.7071, 0, -0.7071], [0, 1, 0], [0.7071, 0, 0.7071]]))
+                add(f"glasses_frame.{side}", "glasses", (v, f, uv), ["Head"], power=2.0)
             else:  # shades
                 add(f"shades.{side}", "glasses",
-                    blob(np.array([ex, m.eye_y, ez * 0.995]), (m.eye_r * 2.05, m.eye_r * 1.55, m.eye_r * 0.5),
-                         p=3.0, segs=16, rings=11), ["Head"], power=2.0, conform=True)
+                    blob(np.array([ex, m.eye_y, ez]), (m.eye_r * 1.40, m.eye_r * 1.02, m.eye_r * 0.16),
+                         p=2.8, segs=16, rings=10), ["Head"], power=2.0)
             # temple arm
-            a = np.array([s * (m.eye_x + m.eye_r * 1.9), m.eye_y + m.eye_r * 0.2, ez])
-            b = np.array([s * hr[0] * 0.92, m.eye_y + m.eye_r * 0.1, hc[2] - hr[2] * 0.15])
+            a = np.array([s * (m.eye_x + m.eye_r * 1.32), m.eye_y + m.eye_r * 0.15, ez])
+            b = surf.point(s * 1.35, eph_l, m.eye_r * 0.05)
             add(f"temple.{side}", "glasses", tube([a, a * 0.5 + b * 0.5, b],
-                                                  [m.eye_r * 0.18, m.eye_r * 0.16, m.eye_r * 0.14], segs=8,
+                                                  [m.eye_r * 0.12, m.eye_r * 0.11, m.eye_r * 0.09], segs=8,
                                                   cap_start="round", cap_end="flat"),
-                ["Head"], power=2.0, conform=True)
+                ["Head"], power=2.0)
         add("bridge", "glasses",
-            blob(np.array([0.0, m.eye_y + m.eye_r * 0.2, hc[2] + hr[2] * 1.03]),
-                 (m.eye_x * 0.5, m.eye_r * 0.16, m.eye_r * 0.16), p=2.0, segs=12, rings=8),
-            ["Head"], power=2.0, conform=True)
+            blob(np.array([0.0, m.eye_y + m.eye_r * 0.14, ez + m.eye_r * 0.04]),
+                 (max(m.eye_r * 0.25, m.eye_x - m.eye_r * 1.15), m.eye_r * 0.12, m.eye_r * 0.12), p=2.0, segs=12, rings=8),
+            ["Head"], power=2.0)
 
     # --- hat --------------------------------------------------------------
     hat = spec["hat"]
     if hat != "none":
         top_y = hc[1] + hr[1]
         if hat == "cap":
-            dome = blob(np.array([0.0, hc[1] + hr[1] * 0.44, 0.0]), (hr[0] * 1.10, hr[1] * 0.60, hr[2] * 1.10),
+            dome = blob(np.array([0.0, hc[1] + hr[1] * 0.44, 0.0]), (hr[0] * 1.12, hr[1] * 0.62, hr[2] * 1.12),
                         p=2.0, segs=max(16, hsegs), rings=12)
             add("cap", "hat", dome, ["Head"], power=2.0, conform=True)
-            add("visor", "hat", blob(np.array([0.0, hc[1] + hr[1] * 0.28, hr[2] * 0.98]),
-                                     (hr[0] * 0.92, hr[1] * 0.08, hr[2] * 0.55), p=2.6, segs=18, rings=9),
-                ["Head"], power=2.0, conform=True)
+            add("visor", "hat", blob(np.array([0.0, hc[1] + hr[1] * 0.28, hc[2] + hr[2] * 0.96]),
+                                     (hr[0] * 0.88, hr[1] * 0.07, hr[2] * 0.52), p=2.6, segs=18, rings=9),
+                ["Head"], power=2.0)
         elif hat == "beanie":
             add("beanie", "hat", blob(np.array([0.0, hc[1] + hr[1] * 0.50, 0.0]),
-                                      (hr[0] * 1.12, hr[1] * 0.66, hr[2] * 1.12), p=2.0, segs=max(16, hsegs), rings=13),
+                                      (hr[0] * 1.14, hr[1] * 0.68, hr[2] * 1.14), p=2.0, segs=max(16, hsegs), rings=13),
                 ["Head"], power=2.0, conform=True)
-            add("brim", "hat", torus(np.array([0.0, hc[1] + hr[1] * 0.24, 0.0]), hr[0] * 1.10, hr[0] * 0.10,
-                                     24, 8), ["Head"], power=2.0, conform=True)
-            add("pom", "hat", blob(np.array([0.0, top_y + hr[1] * 0.06, 0.0]),
-                                   (hr[0] * 0.26, hr[0] * 0.26, hr[0] * 0.26), p=2.0, segs=14, rings=10),
-                ["Head"], power=2.0, conform=True)
+            add("brim", "hat", torus(np.array([0.0, hc[1] + hr[1] * 0.24, hc[2]]), hr[0] * 1.06, hr[0] * 0.10,
+                                     24, 8), ["Head"], power=2.0)
+            add("pom", "hat", blob(np.array([0.0, top_y + hr[1] * 0.14, hc[2]]),
+                                   (hr[0] * 0.24, hr[0] * 0.24, hr[0] * 0.24), p=2.0, segs=14, rings=10),
+                ["Head"], power=2.0)
         elif hat == "sunhat":
-            bv, bf, buv = lathe([(hc[1] + hr[1] * 0.74, hr[0] * 1.06, hr[2] * 1.06),
-                                 (hc[1] + hr[1] * 0.68, hr[0] * 1.68, hr[2] * 1.68)],
+            bv, bf, buv = lathe([(hc[1] + hr[1] * 0.66, hr[0] * 1.02, hr[2] * 1.02),
+                                 (hc[1] + hr[1] * 0.61, hr[0] * 1.65, hr[2] * 1.65),
+                                 (hc[1] + hr[1] * 0.65, hr[0] * 1.65, hr[2] * 1.65),
+                                 (hc[1] + hr[1] * 0.70, hr[0] * 1.02, hr[2] * 1.02)],
                                 max(20, hsegs), close_bottom=False, close_top=False)
+            bv[:, 2] += hc[2]
             add("brim", "hat", (bv, bf, buv), ["Head"], power=2.0, outward=False)
-            add("crown", "hat", blob(np.array([0.0, hc[1] + hr[1] * 0.98, 0.0]),
-                                     (hr[0] * 1.04, hr[1] * 0.50, hr[2] * 1.04), p=2.0, segs=20, rings=12),
-                ["Head"], power=2.0, conform=True)
-            add("band", "hat", torus(np.array([0.0, hc[1] + hr[1] * 0.80, 0.0]), hr[0] * 1.05, hr[0] * 0.06, 22, 8),
-                ["Head"], power=2.0, conform=True)
+            add("crown", "hat", blob(np.array([0.0, hc[1] + hr[1] * 0.86, hc[2]]),
+                                     (hr[0] * 1.02, hr[1] * 0.42, hr[2] * 1.02), p=2.2, segs=20, rings=12),
+                ["Head"], power=2.0)
+            add("band", "hat", torus(np.array([0.0, hc[1] + hr[1] * 0.70, hc[2]]), hr[0] * 1.03, hr[0] * 0.055, 22, 8),
+                ["Head"], power=2.0)
         elif hat == "wizard":
             base_y = hc[1] + hr[1] * 0.56
             prof = []
             steps = 8
             for i in range(steps):
                 t = i / (steps - 1)
-                prof.append((base_y + hr[1] * 2.6 * t, hr[0] * (1.05 - 1.00 * t ** 1.25), hr[0] * (1.05 - 1.00 * t ** 1.25)))
-            add("wizcone", "hat", lathe(prof, max(18, hsegs), close_bottom=True, close_top=True),
-                ["Head"], power=2.0, conform=True)
-            add("wizbrim", "hat", lathe([(base_y - hr[1] * 0.02, hr[0] * 1.9, hr[2] * 1.9),
-                                         (base_y + hr[1] * 0.06, hr[0] * 1.05, hr[2] * 1.05)],
-                                        max(20, hsegs), close_bottom=False, close_top=False),
-                ["Head"], power=2.0, outward=False)
+                prof.append((base_y + hr[1] * 2.2 * t, hr[0] * (1.04 - 0.99 * t ** 1.25), hr[2] * (1.04 - 0.99 * t ** 1.25)))
+            wv, wf, wuv = lathe(prof, max(18, hsegs), close_bottom=True, close_top=True)
+            wv[:, 2] += hc[2]
+            add("wizcone", "hat", (wv, wf, wuv), ["Head"], power=2.0)
+            wbv, wbf, wbuv = lathe([(base_y + hr[1] * 0.04, hr[0] * 1.02, hr[2] * 1.02),
+                                    (base_y - hr[1] * 0.03, hr[0] * 1.75, hr[2] * 1.75),
+                                    (base_y + hr[1] * 0.01, hr[0] * 1.75, hr[2] * 1.75),
+                                    (base_y + hr[1] * 0.08, hr[0] * 1.02, hr[2] * 1.02)],
+                                   max(20, hsegs), close_bottom=False, close_top=False)
+            wbv[:, 2] += hc[2]
+            add("wizbrim", "hat", (wbv, wbf, wbuv), ["Head"], power=2.0, outward=False)
 
     # =====================================================================
     # ASSEMBLE
@@ -1109,7 +1202,8 @@ def build_mesh(spec: dict, m: Metrics, rig: Rig):
         u, v = atlas.map_uv(part.material, part.uvs[:, 0], part.uvs[:, 1])
         all_verts.append(part.verts.astype(np.float32))
         all_uvs.append(np.stack([u, v], axis=1).astype(np.float32))
-        all_norms.append(compute_normals(part.verts, part.faces).astype(np.float32))
+        nrm = part.normals if part.normals is not None else compute_normals(part.verts, part.faces)
+        all_norms.append(nrm.astype(np.float32))
         idx, wts = rig.weights_for(part.verts, part.bones, power=part.power, bias=part.bias)
         all_joints.append(idx.astype(np.uint16))
         all_weights.append(wts)

@@ -213,7 +213,7 @@ def make_materials(image):
         nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
         if "Roughness" in bsdf.inputs:
             bsdf.inputs["Roughness"].default_value = 0.35 if name == "glasses" else (
-                0.55 if name in ("head", "skin") else 0.75)
+                0.55 if name in ("head", "skin", "eyes", "brows", "mouth") else 0.75)
         if "Metallic" in bsdf.inputs:
             bsdf.inputs["Metallic"].default_value = 0.4 if name == "glasses" else 0.0
         m.use_backface_culling = name in ("hair", "glasses", "hat", "extras", "extras_skin")

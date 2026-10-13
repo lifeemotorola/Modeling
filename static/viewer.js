@@ -165,6 +165,12 @@ export class Viewer {
   async loadGLB(url) {
     const loader = new GLTFLoader();
     const gltf = await loader.loadAsync(url);
+    if (this.skeletonHelper) {
+      this.scene.remove(this.skeletonHelper);
+      if (this.skeletonHelper.geometry) this.skeletonHelper.geometry.dispose();
+      if (this.skeletonHelper.material) this.skeletonHelper.material.dispose();
+      this.skeletonHelper = null;
+    }
     if (this.model) {
       this.scene.remove(this.model);
       this.disposeTree(this.model);
@@ -200,6 +206,9 @@ export class Viewer {
 
     if (gltf.animations && gltf.animations.length) {
       this.mixer = new THREE.AnimationMixer(this.model);
+      this.mixer.addEventListener('finished', () => {
+        this.playing = false;
+      });
       for (const clip of gltf.animations) {
         const action = this.mixer.clipAction(clip);
         const key = clip.name.replace(/^Colada_/, '').toLowerCase();
@@ -208,8 +217,8 @@ export class Viewer {
         action.clampWhenFinished = true;
       }
     }
-    this.skeletonHelper = null;
     this.setWireframe(this.wireframe);
+    if (this.showSkeleton) this.setSkeleton(true);
     return { clips: Object.keys(this.actions).map((k) => ({ name: k, duration: this.clipInfo[k].duration })) };
   }
 
@@ -255,6 +264,8 @@ export class Viewer {
       this.actions[this.current].fadeOut(0.18);
     }
     if (restart || this.current !== name) action.reset();
+    action.paused = false;
+    action.enabled = true;
     action.setLoop(this.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
     action.clampWhenFinished = true;
     action.setEffectiveTimeScale(this.speed);
@@ -264,20 +275,38 @@ export class Viewer {
     this.playing = true;
   }
 
-  pause() { this.playing = false; if (this.current) this.actions[this.current]?.stop(); }
-  resume() { this.playing = true; if (this.current) this.actions[this.current]?.play(); }
+  pause() {
+    this.playing = false;
+  }
+
+  resume() {
+    if (!this.current || !this.actions[this.current]) return;
+    const a = this.actions[this.current];
+    const dur = this.duration();
+    if (!this.loop && dur > 0 && a.time >= dur - 1e-3) {
+      a.reset();
+    }
+    a.paused = false;
+    a.enabled = true;
+    a.play();
+    this.playing = true;
+  }
+
   toggle() { this.playing ? this.pause() : this.resume(); }
 
   seek(t) {
     if (!this.current) return;
     const a = this.actions[this.current];
     if (!a) return;
+    a.enabled = true;
+    a.paused = false;
+    a.play();
     a.time = Math.max(0, Math.min(this.clipInfo[this.current].duration, t));
     if (this.mixer) this.mixer.update(0);
   }
 
-  time() { return this.current ? this.actions[this.current].time : 0; }
-  duration() { return this.current ? this.clipInfo[this.current].duration : 0; }
+  time() { return (this.current && this.actions[this.current]) ? this.actions[this.current].time : 0; }
+  duration() { return (this.current && this.clipInfo[this.current]) ? this.clipInfo[this.current].duration : 0; }
 
   setSpeed(v) {
     this.speed = v;
@@ -307,10 +336,7 @@ export class Viewer {
     this.showSkeleton = v;
     if (!this.model) return;
     if (v && !this.skeletonHelper) {
-      const skinned = [];
-      this.model.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
-      if (!skinned.length) return;
-      this.skeletonHelper = new THREE.SkeletonHelper(skinned[0]);
+      this.skeletonHelper = new THREE.SkeletonHelper(this.model);
       this.skeletonHelper.material.linewidth = 2;
       this.skeletonHelper.material.depthTest = false;
       this.skeletonHelper.renderOrder = 3;

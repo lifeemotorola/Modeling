@@ -149,26 +149,33 @@ def draw_pattern(d: ImageDraw.ImageDraw, box, pattern: str, c1, c2, W: int, H: i
         cx = x0 + W // 2
         cy = y0 + int(H * 0.52)
         R = int(H * 0.30)
+        ry_p = R * 1.18
         body = mix(c2, (255, 224, 102), 0.55)
-        d.ellipse([cx - R, cy - int(R * 1.18), cx + R, cy + int(R * 1.18)], fill=body,
-                  outline=darken(body, 0.35), width=max(1, R // 14))
-        # cross hatch
-        for i in range(-3, 4):
-            d.line([(cx - R, cy + i * R * 0.34), (cx + R, cy + i * R * 0.34)], fill=darken(body, 0.22),
-                   width=max(1, R // 22))
-            d.line([(cx + i * R * 0.34 + R * 0.4, cy - int(R * 1.1)), (cx + i * R * 0.34 + R * 0.4, cy + int(R * 1.1))],
-                   fill=darken(body, 0.22), width=max(1, R // 22))
-        # crown
+        # crown drawn first so the pineapple body overlaps its base cleanly
         for i in range(5):
             a = -math.pi / 2 + (i - 2) * 0.36
             tipx, tipy = cx + math.cos(a) * R * 1.05, cy - int(R * 1.15) + math.sin(a) * R * 0.85
-            d.polygon([(cx + (i - 2) * R * 0.30, cy - int(R * 1.05)), (cx + (i - 1) * R * 0.30, cy - int(R * 1.05)),
+            d.polygon([(cx + (i - 1.5) * R * 0.26, cy - int(R * 0.98)),
+                       (cx + (i - 0.5) * R * 0.26, cy - int(R * 0.98)),
                        (tipx, tipy)], fill=(52, 160, 90))
-        # little umbrella + sun for flavour
-        ux, uy = cx - int(W * 0.36), cy + int(H * 0.18)
-        ur = int(W * 0.10)
-        d.pieslice([ux - ur, uy - ur, ux + ur, uy + ur], 180, 360, fill=rng.choice([(240, 80, 90), (255, 209, 102)]))
-        d.line([(ux, uy), (ux, uy + ur)], fill=(90, 62, 40), width=max(1, ur // 6))
+        d.ellipse([cx - R, cy - int(ry_p), cx + R, cy + int(ry_p)], fill=body,
+                  outline=darken(body, 0.35), width=max(1, R // 14))
+        # cross hatch clipped to the pineapple ellipse
+        for i in range(-3, 4):
+            dy = i * R * 0.32
+            if abs(dy) < ry_p * 0.92:
+                hw = R * math.sqrt(max(0.0, 1.0 - (dy / ry_p) ** 2)) * 0.92
+                d.line([(cx - hw, cy + dy), (cx + hw, cy + dy)], fill=darken(body, 0.22),
+                       width=max(1, R // 22))
+        for i in range(-2, 3):
+            dx = i * R * 0.32
+            if abs(dx) < R * 0.92:
+                hh = ry_p * math.sqrt(max(0.0, 1.0 - (dx / R) ** 2)) * 0.92
+                d.line([(cx + dx, cy - hh), (cx + dx, cy + hh)], fill=darken(body, 0.22),
+                       width=max(1, R // 22))
+        # re-draw outline on top of cross-hatch
+        d.ellipse([cx - R, cy - int(ry_p), cx + R, cy + int(ry_p)], fill=None,
+                  outline=darken(body, 0.35), width=max(1, R // 14))
 
 
 def star(d: ImageDraw.ImageDraw, cx, cy, r, col):
@@ -250,16 +257,17 @@ def draw_eye(img: Image.Image, draw: ImageDraw.ImageDraw, box, spec, eye_r, skin
     if lashes or style != "sleepy":
         ul = ImageDraw.Draw(img, "RGBA")
         w = max(1, int(0.07 * sx * eye_r))
-        ul.arc(E(0, 0, 0.90 * eye_r, 0.70 * eye_r), 185, 355, fill=darken(outline, 0.25), width=w)
+        lid = {"round": 0.0, "wide": -0.10, "almond": 0.16, "sleepy": 0.55}.get(style, 0.0)
+        lid_h = max(0.28 * eye_r, (0.68 if style != "star" else 0.66) * eye_r * (1.0 - lid * 0.85))
+        ul.arc(E(0, 0, 0.89 * eye_r, lid_h), 190, 350, fill=darken(outline, 0.25), width=w)
         if lashes:
-            for i, t in enumerate((-0.85, -0.55, -0.2, 0.2, 0.55, 0.85)):
-                a = math.pi * (1.0 + t * 0.5)
-                rr = 0.9 * eye_r
-                bx, by = P(math.cos(a) * rr * 0.95, -math.sin(a) * rr * 0.68)
-                ln = 0.26 * eye_r * sy * (1.0 - 0.35 * abs(t))
-                ang = a - math.pi / 2
-                ul.line([bx, by, bx + math.cos(ang) * ln * 0.5 - 0.5 * ln, by + abs(math.sin(ang)) * ln - ln * 0.15],
-                        fill=darken(outline, 0.35), width=max(1, int(w * 0.8)))
+            for ang in (-0.55, -0.20, 0.15, 0.48, 0.78, 1.02):
+                bx, by = P(math.sin(ang) * 0.88 * eye_r, -math.cos(ang) * lid_h)
+                ln = 0.22 * eye_r * sy * (0.85 + 0.25 * max(0.0, math.sin(ang)))
+                out_ang = ang + 0.28
+                tx = bx + math.sin(out_ang) * ln * (1.0 if not flip else -1.0)
+                ty = by - math.cos(out_ang * 0.7) * ln
+                ul.line([bx, by, tx, ty], fill=darken(outline, 0.35), width=max(1, int(w * 0.85)))
 
 
 def draw_brow(img, box, spec, eye_r, brow_color, flip):
@@ -273,13 +281,13 @@ def draw_brow(img, box, spec, eye_r, brow_color, flip):
     col = brow_color
     thick = {"soft": 0.26, "thin": 0.15, "bold": 0.40, "angry": 0.34, "raised": 0.24}.get(style, 0.25)
     th = max(2, int(thick * eye_r * sx * 0.8))
-    # brow shape: arc from outer (low) to inner (high) ; mirrored per side via flip
-    inner_y = {"soft": -0.06, "thin": -0.02, "bold": -0.10, "angry": 0.16, "raised": -0.16}.get(style, 0.0)
-    outer_y = {"soft": 0.10, "thin": 0.04, "bold": 0.14, "angry": -0.10, "raised": -0.02}.get(style, 0.05)
-    curve = {"soft": 0.16, "thin": 0.12, "bold": 0.18, "angry": 0.06, "raised": 0.30}.get(style, 0.14)
+    # brow shape: t=0 inner (toward nose, wx < 0) -> t=1 outer (toward temple, wx > 0)
+    inner_y = {"soft": -0.04, "thin": -0.02, "bold": -0.06, "angry": 0.18, "raised": -0.16}.get(style, 0.0)
+    outer_y = {"soft": 0.08, "thin": 0.04, "bold": 0.10, "angry": -0.12, "raised": -0.04}.get(style, 0.05)
+    curve = {"soft": 0.16, "thin": 0.12, "bold": 0.16, "angry": 0.05, "raised": 0.28}.get(style, 0.14)
 
     def pt(t):  # t: 0 inner -> 1 outer
-        wx = (0.5 - t) * 1.42 * eye_r
+        wx = (t - 0.5) * 1.42 * eye_r
         wy = (inner_y + (outer_y - inner_y) * t - curve * math.sin(math.pi * t)) * eye_r
         px = wx * sx + W / 2.0
         if flip:
@@ -369,12 +377,39 @@ def _head_skin_field(W: int, H: int, spec) -> np.ndarray:
     return skin_field(theta, phi, spec)
 
 
-def _patch_bg(W: int, H: int, th: float, ph: float, dth: float, dph: float, spec) -> Image.Image:
-    """Background image for a face-feature patch: identical shading to the head
-    at that spot on the skull, so the patch edges vanish into the face."""
-    xs = np.linspace(th - dth, th + dth, W)
-    ys = np.linspace(ph - dph, ph + dph, H)
+def _patch_bg(W: int, H: int, th: float, ph: float, dth: float, dph: float, spec,
+              head_arr: np.ndarray | None = None) -> Image.Image:
+    """Background image for a face-feature patch: identical shading (including
+    blush, freckles, nose shadow and stubble) to the painted head at that spot on
+    the skull, so the patch edges vanish into the face."""
+    # atlas.map_uv insets UVs by eps=0.0012 in atlas space; for 0.25x0.25 patch
+    # cells that is eps_local = 0.0012 / 0.25 = 0.0048.
+    eps_p = 0.0012 / 0.25
+    span_p = 1.0 - 2.0 * eps_p
+    u_grid = ((np.arange(W) + 0.5) / W - eps_p) / span_p
+    v_grid = ((np.arange(H) + 0.5) / H - eps_p) / span_p
+    xs = th - dth + 2.0 * dth * u_grid
+    ys = ph - dph + 2.0 * dph * v_grid
     TH, PH = np.meshgrid(xs, ys)
+    if head_arr is not None:
+        hh, hw = head_arr.shape[:2]
+        u = ((TH - math.pi) % TAU) / TAU
+        v = (np.cos(PH) + 1.0) * 0.5
+        # head cell is 0.50 wide x 0.25 tall in atlas space
+        eps_hu = 0.0012 / 0.50
+        eps_hv = 0.0012 / 0.25
+        uh = np.clip((eps_hu + (1.0 - 2.0 * eps_hu) * u) * hw - 0.5, 0.0, hw - 1.001)
+        vh = np.clip((1.0 - (eps_hv + (1.0 - 2.0 * eps_hv) * v)) * hh - 0.5, 0.0, hh - 1.001)
+        x0 = uh.astype(np.int64)
+        y0 = vh.astype(np.int64)
+        fx = (uh - x0)[..., None]
+        fy = (vh - y0)[..., None]
+        c00 = head_arr[y0, x0]
+        c10 = head_arr[y0, np.minimum(x0 + 1, hw - 1)]
+        c01 = head_arr[np.minimum(y0 + 1, hh - 1), x0]
+        c11 = head_arr[np.minimum(y0 + 1, hh - 1), np.minimum(x0 + 1, hw - 1)]
+        col = (c00 * (1 - fx) + c10 * fx) * (1 - fy) + (c01 * (1 - fx) + c11 * fx) * fy
+        return Image.fromarray(np.clip(col, 0, 255).astype(np.uint8), "RGB")
     return Image.fromarray(skin_field(TH, PH, spec).astype(np.uint8), "RGB")
 
 
@@ -422,12 +457,13 @@ def paint_head(img: Image.Image, box, spec, m, size, ss: int):
             col = darken(warm(skin, 0.18), 0.32)
             d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col + (int(90 + 120 * fr),))
 
-    # nose shadow
+    # nose shadow (directly beneath the 3D nose blob)
     if spec["nose_style"] != "none":
-        cx, cy = _uv_to_px(0.0, math.pi * (MOUTH_PHI_RATIO - 0.036), w2, h2, (0, 0, w2, h2))
-        rx = 0.055 * w2
-        ry = rx * 0.5
-        d.ellipse([cx - rx, cy - ry * 0.6, cx + rx, cy + ry * 1.3], fill=darken(skin, 0.20) + (60,))
+        nose_ph = math.pi * MOUTH_PHI_RATIO - (m.eye_r * 1.00) / m.head_r[1]
+        cx, cy = _uv_to_px(0.0, nose_ph, w2, h2, (0, 0, w2, h2))
+        rx = 0.018 * w2
+        ry = rx * 0.55
+        d.ellipse([cx - rx, cy - ry * 0.4, cx + rx, cy + ry * 1.2], fill=darken(skin, 0.22) + (42,))
 
     # painted facial hair (stubble / colour)
     beard = spec["beard"]
@@ -455,8 +491,10 @@ def paint_head(img: Image.Image, box, spec, m, size, ss: int):
                 r = max(1.0, 0.0024 * w2 / 0.5)
                 d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=bcol + (150,))
 
+    layer_full = layer
     layer = layer.resize((W, H), Image.LANCZOS)
     img.paste(layer, (x0, y0))
+    return np.asarray(layer_full, dtype=np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +523,7 @@ def paint(spec: dict, m, layout: dict, size: int) -> Image.Image:
         return layer
 
     # ---- head ------------------------------------------------------------
-    paint_head(img, cell("head")[0], spec, m, size, ss)
+    head_arr = paint_head(img, cell("head")[0], spec, m, size, ss)
 
     # ---- skin (body + limbs + nose) --------------------------------------
     def skin_fn(dd, box, W, H, s):
@@ -507,19 +545,19 @@ def paint(spec: dict, m, layout: dict, size: int) -> Image.Image:
     s = max(2, ss * 2)
     eye_th, eye_ph, _, _, eye_dth, eye_dph = layout["eye.L"]
     box, W, H = cell("eyes")
-    layer = _patch_bg(W * s, H * s, eye_th, eye_ph, eye_dth, eye_dph, spec)
+    layer = _patch_bg(W * s, H * s, eye_th, eye_ph, eye_dth, eye_dph, spec, head_arr=head_arr)
     draw_eye(layer, ImageDraw.Draw(layer, "RGBA"), (0, 0, W * s, H * s), spec, eye_r, skin, False)
     img.paste(layer.resize((W, H), Image.LANCZOS), (box[0], box[1]))
 
     box, W, H = cell("brows")
     bth, bph, _, _, bdth, bdph = layout["brow.L"]
-    layer = _patch_bg(W * s, H * s, bth, bph, bdth, bdph, spec)
+    layer = _patch_bg(W * s, H * s, bth, bph, bdth, bdph, spec, head_arr=head_arr)
     draw_brow(layer, (0, 0, W * s, H * s), spec, eye_r, hex2rgb(spec["brow_color"]), False)
     img.paste(layer.resize((W, H), Image.LANCZOS), (box[0], box[1]))
 
     box, W, H = cell("mouth")
     mth, mph, _, _, mdth, mdph = layout["mouth"]
-    layer = _patch_bg(W * s, H * s, mth, mph, mdth, mdph, spec)
+    layer = _patch_bg(W * s, H * s, mth, mph, mdth, mdph, spec, head_arr=head_arr)
     lip = mix(skin, warm(darken(skin, 0.35), 0.4), 0.55)
     draw_mouth(layer, (0, 0, W * s, H * s), spec, eye_r, skin, lip)
     img.paste(layer.resize((W, H), Image.LANCZOS), (box[0], box[1]))
@@ -576,8 +614,13 @@ def paint(spec: dict, m, layout: dict, size: int) -> Image.Image:
             dd.rectangle([box[0], box[1], box[2], box[1] + band], fill=darken(c1, 0.28))
             if collar == "v":
                 cx = box[0] + W // 2
-                dd.polygon([(cx - W * 0.20, box[1] + band), (cx + W * 0.20, box[1] + band),
-                            (cx, box[1] + H * 0.34)], fill=skin)
+                vw = W * 0.14
+                vh = H * 0.30
+                trim = max(2, int(W * 0.022))
+                dd.polygon([(cx - vw - trim, box[1]), (cx + vw + trim, box[1]),
+                            (cx, box[1] + vh + trim * 1.2)], fill=darken(c1, 0.28))
+                dd.polygon([(cx - vw, box[1]), (cx + vw, box[1]),
+                            (cx, box[1] + vh)], fill=skin)
         if spec["top_style"] == "hoodie":
             dd.rectangle([box[0], box[2] and box[1] + H - int(H * 0.05), box[2], box[3]], fill=darken(c1, 0.22))
             # kangaroo pocket

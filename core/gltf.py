@@ -68,10 +68,12 @@ def export_glb(spec, metrics, rig: Rig, mesh, texture_png: bytes, clips: list[di
     # ---------------------------------------------------------------- mesh
     verts = np.asarray(mesh.verts, dtype=np.float32)
     norms = np.asarray(mesh.normals, dtype=np.float32)
-    uvs = np.asarray(mesh.uvs, dtype=np.float32)
+    uvs = np.asarray(mesh.uvs, dtype=np.float32).copy()
+    uvs[:, 1] = 1.0 - uvs[:, 1]                                # glTF 2.0 UV origin is top-left
     joints = np.asarray(mesh.joints, dtype=np.uint16)          # (N,4) -> skin.joints index
     weights = np.asarray(mesh.weights, dtype=np.float32)
     faces = np.asarray(mesh.faces, dtype=np.uint32)
+    flat_faces = faces.reshape(-1)
 
     acc_pos = b.add_accessor(verts, "VEC3", FLOAT, target=34962, minmax=True)
     acc_nrm = b.add_accessor(norms, "VEC3", FLOAT, target=34962)
@@ -81,7 +83,9 @@ def export_glb(spec, metrics, rig: Rig, mesh, texture_png: bytes, clips: list[di
 
     primitives = []
     for material, ranges in mesh.index_ranges.items():
-        idx = np.concatenate([faces[s:s + c].reshape(-1) for s, c in ranges]).astype(np.uint32)
+        idx = np.concatenate([flat_faces[s:s + c] for s, c in ranges]).astype(np.uint32)
+        if idx.size == 0:
+            continue
         acc_idx = b.add_accessor(idx, "SCALAR", UINT, target=34963)
         primitives.append({
             "attributes": {"POSITION": acc_pos, "NORMAL": acc_nrm, "TEXCOORD_0": acc_uv,
@@ -105,7 +109,7 @@ def export_glb(spec, metrics, rig: Rig, mesh, texture_png: bytes, clips: list[di
                 "baseColorTexture": {"index": 0},
                 "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
                 "metallicFactor": 0.0 if name != "glasses" else 0.35,
-                "roughnessFactor": 0.62 if name in ("head", "skin", "hat", "top", "bottom") else 0.78,
+                "roughnessFactor": 0.62 if name in ("head", "skin", "eyes", "brows", "mouth", "hat", "top", "bottom") else 0.78,
             },
             "doubleSided": name in double_sided,
         })
