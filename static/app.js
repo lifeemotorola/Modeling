@@ -62,6 +62,9 @@ function buildTabs() {
   }
 }
 
+const VIEW_ONLY_KEYS = new Set(['lighting', 'show_grid', 'wireframe', 'show_skeleton', 'auto_rotate', 'head_track']);
+const EXPRESSION_DEP_KEYS = new Set(['eye_style', 'brow_style', 'brow_tilt', 'mouth_style']);
+
 function buildControls() {
   const host = $('controls');
   host.innerHTML = '';
@@ -72,6 +75,14 @@ function buildControls() {
   title.textContent = group.label;
   host.appendChild(title);
 
+  const markCustomExpression = (key) => {
+    if (EXPRESSION_DEP_KEYS.has(key) && state.spec.expression !== 'custom') {
+      state.spec.expression = 'custom';
+      const expSel = host.querySelector('select[data-key="expression"]');
+      if (expSel) expSel.value = 'custom';
+    }
+  };
+
   for (const f of group.fields) {
     const wrap = document.createElement('div');
     wrap.className = 'field';
@@ -81,7 +92,7 @@ function buildControls() {
       + '</div>';
 
     if (f.type === 'range') {
-      wrap.innerHTML = `${label}<input type="range" min="${f.min}" max="${f.max}" step="${f.step}" value="${cur}">`
+      wrap.innerHTML = `${label}<input type="range" data-key="${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${cur}">`
         + (f.help ? `<div class="help">${f.help}</div>` : '');
       const inp = wrap.querySelector('input');
       const paint = () => {
@@ -89,23 +100,40 @@ function buildControls() {
         inp.style.setProperty('--fill', pct + '%');
         $('v-' + f.key).textContent = fmt(inp.value, f) + (f.unit || '');
       };
-      inp.oninput = () => { state.spec[f.key] = parseFloat(inp.value); paint(); schedule(); };
+      inp.oninput = () => {
+        state.spec[f.key] = parseFloat(inp.value);
+        markCustomExpression(f.key);
+        paint();
+        if (VIEW_ONLY_KEYS.has(f.key)) syncTools();
+        else schedule();
+      };
       inp.onchange = () => pushUndo();
       paint();
     } else if (f.type === 'color') {
-      wrap.innerHTML = `${label}<div class="swatch"><input type="color" value="${cur}"><code>${cur}</code></div>`;
+      wrap.innerHTML = `${label}<div class="swatch"><input type="color" data-key="${f.key}" value="${cur}"><code>${cur}</code></div>`;
       const inp = wrap.querySelector('input');
       inp.oninput = () => { state.spec[f.key] = inp.value; wrap.querySelector('code').textContent = inp.value; schedule(); };
       inp.onchange = () => pushUndo();
     } else if (f.type === 'select') {
       const opts = f.options.map((o) => `<option value="${o}"${o === cur ? ' selected' : ''}>${o}</option>`).join('');
-      wrap.innerHTML = `${label}<select>${opts}</select>` + (f.help ? `<div class="help">${f.help}</div>` : '');
+      wrap.innerHTML = `${label}<select data-key="${f.key}">${opts}</select>` + (f.help ? `<div class="help">${f.help}</div>` : '');
       const sel = wrap.querySelector('select');
-      sel.onchange = () => { state.spec[f.key] = sel.value; pushUndo(); schedule(true); };
+      sel.onchange = () => {
+        state.spec[f.key] = sel.value;
+        markCustomExpression(f.key);
+        pushUndo();
+        if (VIEW_ONLY_KEYS.has(f.key)) syncTools();
+        else schedule(true);
+      };
     } else if (f.type === 'bool') {
-      wrap.innerHTML = `<label class="toggle"><input type="checkbox"${cur ? ' checked' : ''}><span>${f.label}</span></label>`;
+      wrap.innerHTML = `<label class="toggle"><input type="checkbox" data-key="${f.key}"${cur ? ' checked' : ''}><span>${f.label}</span></label>`;
       const inp = wrap.querySelector('input');
-      inp.onchange = () => { state.spec[f.key] = inp.checked; pushUndo(); schedule(true); };
+      inp.onchange = () => {
+        state.spec[f.key] = inp.checked;
+        pushUndo();
+        if (VIEW_ONLY_KEYS.has(f.key)) syncTools();
+        else schedule(true);
+      };
     } else if (f.type === 'checkboxes') {
       wrap.innerHTML = `<div class="row"><label>${f.label}</label></div><div class="chips"></div>`;
       const chips = wrap.querySelector('.chips');
@@ -220,6 +248,12 @@ async function build() {
 }
 
 function applyMeta(meta) {
+  if (meta.spec && state.spec.expression !== 'custom') {
+    for (const k of EXPRESSION_DEP_KEYS) {
+      if (meta.spec[k] !== undefined) state.spec[k] = meta.spec[k];
+    }
+    if (state.activeTab === 'face') buildControls();
+  }
   const s = meta.stats;
   $('badge-verts').textContent = s.vertices.toLocaleString();
   $('badge-tris').textContent = s.triangles.toLocaleString();
@@ -296,9 +330,10 @@ function buildClips(clips) {
 }
 
 function selectClip(name) {
-  viewer.play(name, { restart: true });
-  viewer.loop = state.clipMeta.find((c) => c.name === name)?.loop ?? true;
+  const c = state.clipMeta.find((x) => x.name === name);
+  viewer.loop = c ? (c.loop ?? true) : true;
   $('tr-loop').classList.toggle('on', viewer.loop);
+  viewer.play(name, { restart: true });
   syncClipUI();
 }
 
@@ -308,6 +343,7 @@ function syncClipUI() {
   const info = state.clipMeta.find((c) => c.name === cur);
   $('anim-name').textContent = info ? (info.label || cur) : '–';
   $('tr-dur').textContent = info ? `${info.duration.toFixed(2)}s` : '–';
+  $('tr-play').textContent = viewer.playing ? '⏸' : '▶';
 }
 
 function syncTools() {
@@ -325,6 +361,7 @@ function syncTools() {
   }
   const theme = state.spec.lighting || 'studio';
   viewer.setTheme(theme);
+  try { localStorage.setItem('colada.spec', JSON.stringify(state.spec)); } catch (e) { /* ignore */ }
 }
 
 /* ------------------------------------------------------------ transport */
@@ -334,7 +371,11 @@ function bindTransport() {
     viewer.toggle();
     $('tr-play').textContent = viewer.playing ? '⏸' : '▶';
   };
-  $('tr-first').onclick = () => { viewer.seek(0); viewer.play(viewer.current, { restart: true }); };
+  $('tr-first').onclick = () => {
+    viewer.seek(0);
+    viewer.play(viewer.current, { restart: true });
+    $('tr-play').textContent = viewer.playing ? '⏸' : '▶';
+  };
   $('tr-loop').onclick = () => {
     viewer.setLoop(!viewer.loop);
     $('tr-loop').classList.toggle('on', viewer.loop);
@@ -342,17 +383,23 @@ function bindTransport() {
   $('tr-speed').onchange = (e) => viewer.setSpeed(parseFloat(e.target.value));
   const scrub = $('tr-scrub');
   let scrubbing = false;
-  const wasPlaying = () => viewer.playing;
-  scrub.addEventListener('pointerdown', () => { scrubbing = true; viewer.pause(); });
+  let wasPlaying = false;
+  scrub.addEventListener('pointerdown', () => {
+    scrubbing = true;
+    wasPlaying = viewer.playing;
+    viewer.pause();
+    $('tr-play').textContent = '▶';
+  });
   window.addEventListener('pointerup', () => {
     if (!scrubbing) return;
     scrubbing = false;
-    if (wasPlaying()) viewer.resume();
+    if (wasPlaying) viewer.resume();
     $('tr-play').textContent = viewer.playing ? '⏸' : '▶';
   });
   scrub.addEventListener('input', () => {
     const d = viewer.duration() || 1;
     viewer.seek((scrub.value / 1000) * d);
+    scrub.style.setProperty('--fill', (scrub.value / 10) + '%');
     $('tr-time').textContent = viewer.time().toFixed(2) + 's';
   });
   setInterval(() => {
@@ -362,6 +409,7 @@ function bindTransport() {
     scrub.value = Math.round((viewer.time() / d) * 1000);
     scrub.style.setProperty('--fill', (scrub.value / 10) + '%');
     $('tr-time').textContent = viewer.time().toFixed(2) + 's';
+    $('tr-play').textContent = viewer.playing ? '⏸' : '▶';
   }, 90);
 }
 
@@ -373,6 +421,8 @@ function bindTools() {
       state.spec[key] = !state.spec[key];
       $(id).classList.toggle('on', !!state.spec[key]);
       after && after(state.spec[key]);
+      if (state.activeTab === 'studio') buildControls();
+      try { localStorage.setItem('colada.spec', JSON.stringify(state.spec)); } catch (e) { /* ignore */ }
     };
   };
   toggle('t-wire', 'wireframe', (v) => viewer.setWireframe(v));
@@ -504,6 +554,7 @@ async function boot() {
 
   buildPresets();
   refreshUI();
+  syncTools();
   bindTransport();
   bindTools();
   bindKeys();

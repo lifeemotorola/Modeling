@@ -365,51 +365,57 @@ _EXTRAS = ["none", "none", "none", "cat", "fox", "puff"]
 
 
 def random_spec(seed: int | None = None, base: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Tasteful random character. Correlates a few traits so results look intentional."""
+    """Tasteful random character. Correlates a few traits so results look intentional.
+    When `base` is provided, keeps body and face traits and randomizes hair, outfit and extras.
+    """
     rng = random.Random(seed)
     spec = defaults() if base is None else clamp_spec(base)
 
-    chibi = rng.random() < 0.22
-    tall = rng.random() < 0.25
-    if chibi:
-        spec.update(
-            height=round(rng.uniform(1.0, 1.3), 2), head_scale=round(rng.uniform(1.5, 1.9), 2),
-            leg_length=round(rng.uniform(0.75, 0.9), 2), eye_size=round(rng.uniform(1.2, 1.5), 2),
-            body_fat=round(rng.uniform(0.35, 0.7), 2), neck_scale=round(rng.uniform(0.65, 0.85), 2),
-            arm_length=round(rng.uniform(0.82, 0.95), 2), hand_size=round(rng.uniform(1.0, 1.3), 2),
-        )
-    else:
-        spec.update(
-            height=round(rng.uniform(1.62, 1.95) if tall else rng.uniform(1.48, 1.78), 2),
-            head_scale=round(rng.uniform(0.92, 1.25), 2),
-            leg_length=round(rng.uniform(0.95, 1.25) if tall else rng.uniform(0.88, 1.12), 2),
-        )
+    if base is None:
+        chibi = rng.random() < 0.22
+        tall = rng.random() < 0.25
+        if chibi:
+            spec.update(
+                height=round(rng.uniform(1.0, 1.3), 2), head_scale=round(rng.uniform(1.5, 1.9), 2),
+                leg_length=round(rng.uniform(0.75, 0.9), 2), eye_size=round(rng.uniform(1.2, 1.5), 2),
+                body_fat=round(rng.uniform(0.35, 0.7), 2), neck_scale=round(rng.uniform(0.65, 0.85), 2),
+                arm_length=round(rng.uniform(0.82, 0.95), 2), hand_size=round(rng.uniform(1.0, 1.3), 2),
+            )
+        else:
+            spec.update(
+                height=round(rng.uniform(1.62, 1.95) if tall else rng.uniform(1.48, 1.78), 2),
+                head_scale=round(rng.uniform(0.92, 1.25), 2),
+                leg_length=round(rng.uniform(0.95, 1.25) if tall else rng.uniform(0.88, 1.12), 2),
+            )
 
-    spec["body_fat"] = round(rng.uniform(0.1, 0.8), 2)
-    spec["muscle"] = round(rng.uniform(0.1, 0.95) if not chibi else rng.uniform(0.05, 0.5), 2)
-    spec["shoulder_scale"] = round(rng.uniform(0.85, 1.35), 2)
-    spec["hip_scale"] = round(rng.uniform(0.85, 1.25), 2)
-    spec["chest"] = round(rng.uniform(0.25, 0.75), 2)
-    spec["waist"] = round(rng.uniform(0.15, 0.8), 2)
-    spec["arm_thick"] = round(rng.uniform(0.8, 1.35), 2)
-    spec["leg_thick"] = round(rng.uniform(0.85, 1.4), 2)
-    spec["torso_scale"] = round(rng.uniform(0.92, 1.12), 2)
-    spec["skin_tone"] = rng.choice(["#f6d3b0", "#f0c69c", "#dfa87a", "#c98a5b", "#a86a42", "#7d4b2c", "#5a3421", "#f2c1a0", "#e8b48c"])
+        spec["body_fat"] = round(rng.uniform(0.1, 0.8), 2)
+        spec["muscle"] = round(rng.uniform(0.1, 0.95) if not chibi else rng.uniform(0.05, 0.5), 2)
+        spec["shoulder_scale"] = round(rng.uniform(0.85, 1.35), 2)
+        spec["hip_scale"] = round(rng.uniform(0.85, 1.25), 2)
+        spec["chest"] = round(rng.uniform(0.25, 0.75), 2)
+        spec["waist"] = round(rng.uniform(0.15, 0.8), 2)
+        spec["arm_thick"] = round(rng.uniform(0.8, 1.35), 2)
+        spec["leg_thick"] = round(rng.uniform(0.85, 1.4), 2)
+        spec["torso_scale"] = round(rng.uniform(0.92, 1.12), 2)
+        spec["skin_tone"] = rng.choice(["#f6d3b0", "#f0c69c", "#dfa87a", "#c98a5b", "#a86a42", "#7d4b2c", "#5a3421", "#f2c1a0", "#e8b48c"])
+        spec["eye_color"] = rng.choice(["#3f6fae", "#2e8b57", "#8b5e3c", "#6b4fbb", "#c9a227", "#3a3f47", "#2ec4b6", "#c74b50"])
+        spec["eye_style"] = rng.choice(["round", "round", "wide", "almond", "sleepy", "star"])
+        spec["eye_size"] = round(rng.uniform(0.85, 1.35), 2)
+        spec["brow_style"] = rng.choice(["soft", "thin", "bold", "angry", "raised"])
+        spec["mouth_style"] = rng.choice(["smile", "smile", "grin", "smirk", "neutral", "open"])
+        spec["blush"] = round(rng.uniform(0.0, 0.6), 2)
+        spec["freckles"] = round(rng.choice([0, 0, 0, rng.uniform(0.2, 0.8)]), 2)
+        spec["nose_style"] = rng.choice(["button", "small", "snub", "wide"])
+        spec["beard"] = rng.choice(["none", "none", "none", "none", "stubble", "mustache", "goatee", "full"])
+        spec["expression"] = "custom"
+
     spec["hair_style"] = rng.choice(_HAIR)
     spec["hair_color"] = rng.choice(["#3b2a20", "#1b1f3a", "#5a3421", "#f2b134", "#e0503a", "#7c4dff", "#2ec4b6", "#cfd3d8", "#ff8fab", "#161a24"])
     spec["hair_tip_color"] = rng.choice(["#a8703f", "#ffd166", "#e9f1f7", "#5b6bff", "#ff7b54", "#06d6a0", spec["hair_color"]])
     spec["hair_volume"] = round(rng.uniform(0.75, 1.35), 2)
     spec["bangs"] = round(rng.uniform(0.0, 1.0), 2)
-    spec["eye_color"] = rng.choice(["#3f6fae", "#2e8b57", "#8b5e3c", "#6b4fbb", "#c9a227", "#3a3f47", "#2ec4b6", "#c74b50"])
-    spec["eye_style"] = rng.choice(["round", "round", "wide", "almond", "sleepy", "star"])
-    spec["eye_size"] = round(rng.uniform(0.85, 1.35), 2)
-    spec["brow_style"] = rng.choice(["soft", "thin", "bold", "angry", "raised"])
-    spec["mouth_style"] = rng.choice(["smile", "smile", "grin", "smirk", "neutral", "open"])
-    spec["blush"] = round(rng.uniform(0.0, 0.6), 2)
-    spec["freckles"] = round(rng.choice([0, 0, 0, rng.uniform(0.2, 0.8)]), 2)
-    spec["nose_style"] = rng.choice(["button", "small", "snub", "wide"])
-    spec["beard"] = rng.choice(["none", "none", "none", "none", "stubble", "mustache", "goatee", "full"])
-    spec["beard_color"] = spec["hair_color"]
+    if base is None:
+        spec["beard_color"] = spec["hair_color"]
 
     spec["top_style"] = rng.choice(_TOPS)
     spec["top_pattern"] = rng.choice(_PATTERNS)
@@ -433,24 +439,20 @@ def random_spec(seed: int | None = None, base: dict[str, Any] | None = None) -> 
     spec["ears"] = rng.choice(["none", "none", "none", "none", "cat", "fox", "elf", "round"])
     spec["tail"] = rng.choice(["none", "none", "none", "none", "cat", "fox", "puff"])
     if spec["ears"] != "none" or spec["tail"] != "none":
-        spec["ears"] = spec["ears"] if spec["ears"] != "none" else rng.choice(["cat", "fox", "puff"])
+        spec["ears"] = spec["ears"] if spec["ears"] != "none" else rng.choice(["cat", "fox", "elf", "round"])
     spec["glasses"] = rng.choice(["none", "none", "none", "round", "square", "shades"])
     spec["hat"] = rng.choice(["none", "none", "none", "none", "cap", "beanie", "sunhat", "wizard"])
     if spec["hat"] != "none":
         spec["hat_color"] = rng.choice(["#7c4dff", "#e0503a", "#20242c", "#2ec4b6", "#f2b134", "#f6e6b4"])
         spec["hat_color2"] = rng.choice(["#ffd166", "#e9f1f7", "#20242c"])
-    spec["expression"] = "custom"
     return clamp_spec(spec)
 
 
 def preset_spec(name: str) -> dict[str, Any]:
-    """Preset specs are built on top of the randomizer baseline for variety."""
+    """Build a preset character spec deterministically from the default baseline."""
     p = PRESETS.get(name)
     if not p:
         return defaults()
     base = defaults()
-    if name != "colada":
-        # give non-default presets a deterministic random base for richness
-        base = random_spec(seed=hash(name) % 10_000)
     base.update(copy.deepcopy(p["spec"]))
     return clamp_spec(base)

@@ -105,8 +105,8 @@ def check(glb_path: str) -> tuple[bool, list[str]]:
             if prim["material"] >= len(gltf["materials"]):
                 fail(f"prim {mi}.{pi} material out of range")
             idx = gltf["accessors"][prim["indices"]]
-            if idx["count"] % 3:
-                fail(f"prim {mi}.{pi} index count {idx['count']} is not a triangle list")
+            if idx["count"] == 0 or idx["count"] % 3:
+                fail(f"prim {mi}.{pi} index count {idx['count']} is empty or not a triangle list")
     log.append(f"mesh: {sum(len(m['primitives']) for m in gltf.get('meshes', []))} primitives, skinned + indexed")
 
     # --- skin ---------------------------------------------------------------

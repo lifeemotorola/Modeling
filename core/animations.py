@@ -78,7 +78,7 @@ class Pose:
     # --- semantic helpers -------------------------------------------------
     def arm(self, side: str, raise_=0.0, fwd=0.0, twist=0.0):
         m = MIRROR[side]
-        self.s(f"UpperArm.{side}", x=twist, y=-fwd * m, z=raise_ * m)
+        self.s(f"UpperArm.{side}", x=-fwd, y=twist * m, z=raise_ * m)
 
     def elbow(self, side: str, bend=0.0, twist=0.0):
         self.s(f"LowerArm.{side}", x=-bend, y=0.0, z=twist * MIRROR[side])
@@ -208,14 +208,14 @@ def clip_jump(u: float, pose: Pose, d):
 
 
 def clip_wave(u: float, pose: Pose, d):
-    """2.2s: raise the right arm and wave, weight on one leg."""
+    """2.4s: raise the right arm and wave, weight on one leg."""
     raise_up = smoothstep(u / 0.18)
     down = 1.0 - smoothstep((u - 0.86) / 0.14)
     k = min(raise_up, down)
     wave = math.sin(TAU * 3.0 * max(0.0, u - 0.16) / 0.7)
-    pose.arm("R", raise_=lerp(D(-2), D(80), k), fwd=lerp(D(2), D(24), k))
-    pose.elbow("R", bend=lerp(D(10), D(46), k))
-    pose.hand("R", z=lerp(D(4), D(26) * wave, k), x=D(6) * wave * k)
+    pose.arm("R", raise_=lerp(D(-2), D(66), k), fwd=lerp(D(2), D(14), k))
+    pose.elbow("R", bend=lerp(D(10), D(18), k), twist=lerp(0.0, D(86) + D(24) * wave, k))
+    pose.hand("R", z=lerp(D(4), D(22) * wave, k), x=D(6) * wave * k)
     pose.shoulder("R", up=D(7) * k)
     pose.arm("L", raise_=D(-4), fwd=D(2))
     pose.elbow("L", bend=D(11))
@@ -277,8 +277,8 @@ def clip_cheer(u: float, pose: Pose, d):
     pose.head(pitch=D(-10) - D(6) * hop, roll=D(5) * math.sin(a + 1.0))
     for side, ph in (("L", 0.0), ("R", math.pi)):
         s = 0.5 + 0.5 * math.sin(a * 2 + ph)
-        pose.arm(side, raise_=D(78) + D(16) * s, fwd=D(10))
-        pose.elbow(side, bend=D(28) + D(20) * s)
+        pose.arm(side, raise_=D(82) + D(14) * s, fwd=D(14))
+        pose.elbow(side, bend=D(16), twist=D(34) + D(18) * s)
         pose.hand(side, z=D(20) * s)
         pose.knee(side, bend=D(8) + D(24) * hop)
         pose.leg(side, spread=D(4))
@@ -294,8 +294,8 @@ def clip_zombie(u: float, pose: Pose, d):
         pose.leg(side, fwd=D(16) * math.cos(p), spread=D(3))
         pose.knee(side, bend=D(9) + D(14) * max(0.0, math.sin(p + 1.2)))
         pose.foot(side, pitch=D(-10))
-        pose.arm(side, raise_=D(72) + D(4) * math.sin(p), fwd=D(6))
-        pose.elbow(side, bend=D(16) + D(10) * math.sin(p + 0.5))
+        pose.arm(side, raise_=D(-20) + D(4) * math.sin(p), fwd=D(78) + D(6) * math.sin(p))
+        pose.elbow(side, bend=D(14) + D(8) * math.sin(p + 0.5))
         pose.hand(side, x=D(18), z=D(-8))
     pose.spine(pitch=D(16), roll=D(5) * drag, yaw=D(6) * math.sin(a * 0.5))
     pose.head(pitch=D(-14) + D(4) * math.sin(a * 2), roll=D(13) * math.sin(a * 1.3 + 0.6))
