@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colada Character Maker</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍍</text></svg>">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three.module.js",
+    "three/addons/": "/static/vendor/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+
+  <header class="top">
+    <div class="brand">
+      <span class="pine">🍍</span>
+      <div><b>Colada Character Maker</b><br><span>python engine · blender export</span></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn" id="btn-random" title="Randomize everything (R)">🎲 <b>Randomize</b></button>
+      <button class="btn small ghost" id="btn-random-tweak" title="Randomize only the outfit & hair (T)">🎨 tweak</button>
+      <div class="sep"></div>
+      <button class="btn small" id="btn-undo" title="Undo (Ctrl+Z)">↶</button>
+      <button class="btn small" id="btn-redo" title="Redo (Ctrl+Shift+Z)">↷</button>
+      <button class="btn small" id="btn-reset" title="Back to the Piña Colada default">reset</button>
+      <div class="sep"></div>
+      <button class="btn primary" id="btn-build">⚡ Build character</button>
+    </div>
+  </header>
+
+  <!-- ---------------------------------------------------------------- left -->
+  <aside class="left">
+    <div class="section-head">Presets</div>
+    <div class="presets" id="presets"></div>
+    <div class="tabs" id="tabs"></div>
+    <div class="controls" id="controls"></div>
+  </aside>
+
+  <!-- ------------------------------------------------------------ viewport -->
+  <main class="stage">
+    <canvas id="view"></canvas>
+    <div class="stage-tools">
+      <button class="btn small" id="t-wire">🕸 Wireframe</button>
+      <button class="btn small" id="t-bones">🦴 Skeleton</button>
+      <button class="btn small" id="t-grid">▦ Grid</button>
+      <button class="btn small" id="t-rot">🔄 Auto-rotate</button>
+      <button class="btn small" id="t-head">👁 Head-track</button>
+      <button class="btn small" id="t-shot">📸 Shot</button>
+      <button class="btn small" id="t-rec">⏺ Record</button>
+      <button class="btn small" id="t-fit">🎯 Fit</button>
+    </div>
+    <div class="badge">
+      <span id="badge-text">ready</span>
+      <b id="badge-verts">–</b><span>verts</span>
+      <b id="badge-tris">–</b><span>tris</span>
+      <b id="badge-bones">–</b><span>bones</span>
+      <b id="badge-clips">–</b><span>clips</span>
+    </div>
+    <div class="busy" id="busy"><div class="box"><div class="spinner"></div><div id="busy-text">building character…</div></div></div>
+    <div class="toast" id="toast"></div>
+  </main>
+
+  <!-- --------------------------------------------------------------- right -->
+  <aside class="right">
+    <div class="panel-block">
+      <h3>Animation <span class="pill" id="anim-name">–</span></h3>
+      <div class="clip-pills" id="clips"></div>
+      <div class="transport">
+        <button class="icon" id="tr-first" title="Restart clip">⏮</button>
+        <button class="icon main" id="tr-play" title="Play / pause (Space)">▶</button>
+        <button class="icon" id="tr-loop" title="Loop">🔁</button>
+        <select id="tr-speed" style="width:auto" title="Playback speed">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+        </select>
+      </div>
+      <div class="scrub">
+        <input type="range" class="scrub-range" id="tr-scrub" min="0" max="1000" value="0">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dimmer)">
+          <span id="tr-time">0.00s</span><span id="tr-dur">–</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-block">
+      <h3>Character stats</h3>
+      <div class="stat-grid" id="stats"></div>
+    </div>
+
+    <div class="panel-block">
+      <h3>Export</h3>
+      <div class="exports">
+        <a class="btn small" id="x-glb" download>📦 .glb</a>
+        <a class="btn small" id="x-zip" download>🗜 bundle</a>
+        <a class="btn small" id="x-tex" download>🖼 texture</a>
+        <a class="btn small" id="x-blend" download>🐍 blender</a>
+        <a class="btn small" id="x-spec" download>📄 spec</a>
+        <button class="btn small" id="x-save">💾 save to library</button>
+      </div>
+    </div>
+
+    <div class="panel-block">
+      <h3>Library <span class="pill" id="lib-count"></span></h3>
+      <div class="library" id="library"><div class="lib-empty">nothing saved yet</div></div>
+    </div>
+
+    <div class="panel-block">
+      <h3>Shortcuts</h3>
+      <div class="kbd">
+        <span><b>R</b> random</span><span><b>T</b> tweak</span><span><b>Space</b> play</span>
+        <span><b>1-9</b> clip</span><span><b>G</b> grid</span><span><b>B</b> bones</span>
+        <span><b>W</b> wireframe</span><span><b>Ctrl+Z</b> undo</span><span><b>Ctrl+S</b> export glb</span>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:var(--dimmer)" id="engine-line">
+        engine idle
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script type="module" src="/static/viewer.js"></script>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+# Colada Character Maker - runtime requirements
+# (the web server itself only uses the Python standard library)
+numpy>=1.21
+Pillow>=9.0
